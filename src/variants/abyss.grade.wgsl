@@ -37,11 +37,10 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let ph = ABYSS_TAU * fract(time * 0.001);
 
   // breath: 10 s, small, and lagging a little with distance from the centre
-  let swell = sin(ABYSS_TAU * (time * 0.1) - 0.5 * length(d));
+  let swell = sin(ABYSS_TAU * fract(time * 0.1) - 0.5 * length(d));
   let breath = 1.0 + 0.08 * swell;
 
-  // caustics drift slowly up-left across the frame
-  // (a broad web and a finer one riding on it)
+  // caustics: a broad web with a finer one riding on it, both drifting slowly
   let pa = uv * vec2f(asp, 1.0);
   let web = 0.7 * abyss_caustic(pa, ph) + 0.3 * abyss_caustic(pa * 2.7 + vec2f(5.3, 1.9), ph);
 
