@@ -62,18 +62,19 @@ export class Pointers {
       document.addEventListener(g, (e) => e.preventDefault());
   }
 
-  /** Fold accumulated pointer state into `input`. Returns true if the human did anything. */
+  /** Fold accumulated pointer state into `input`; marks `input.active` on any human input. */
   apply(input: Input, now: number): void {
-    const held = [...this.touches.values()];
-    const single = held.length === 1 ? held[0] : undefined;
+    const single = this.touches.size === 1 ? this.touches.values().next().value : undefined;
     input.hold = !!single && !single.moved && now - single.t0 > HOLD_MS;
-    const dragging = held.length === 1 && single!.moved;
+    const dragging = !!single?.moved;
     input.stir.active = dragging;
     if (dragging) {
+      // a finger that stops moving stops pushing: decay the last measured velocity
+      const fade = Math.exp(-Math.max(0, now - this.stirLast) / 150);
       input.stir.x = this.stirPos[0];
       input.stir.y = this.stirPos[1];
-      input.stir.vx = this.stirV[0];
-      input.stir.vy = this.stirV[1];
+      input.stir.vx = this.stirV[0] * fade;
+      input.stir.vy = this.stirV[1] * fade;
     }
     input.orbitYaw = this.orbitYaw;
     input.orbitPitch = this.orbitPitch;
@@ -92,7 +93,7 @@ export class Pointers {
     }
     this.joystick[0] = jx;
     this.joystick[1] = jy;
-    if (this.pulse || input.hold || dragging || held.length > 1 || jx !== 0 || jy !== 0)
+    if (this.pulse || input.hold || dragging || this.touches.size > 1 || jx !== 0 || jy !== 0)
       input.active = true;
     this.pulse = false;
   }
@@ -176,7 +177,8 @@ export class Pointers {
     e.preventDefault();
     if (!this.enabled) return;
     this.pulse = true;
-    if (e.ctrlKey) this.pinch += -e.deltaY * 0.01; // trackpad pinch
+    if (e.ctrlKey)
+      this.pinch += -e.deltaY * 0.01; // trackpad pinch
     else this.dive = clamp(this.dive + e.deltaY * -0.0012, 0, 1);
   };
 

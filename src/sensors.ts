@@ -136,7 +136,7 @@ export class Sensors {
       this.lastHeading = pose.heading;
     }
     this.rawTilt = tiltFromPose(pose, this.rest);
-    if (pose.headingConfidence > 0.2 && this.lastHeading !== null) {
+    if (pose.headingConfidence > 0.3 && this.lastHeading !== null) {
       // heading grows counter-clockwise; turning right (clockwise) must increase yaw
       this.yawRaw -= wrapAngle(pose.heading - this.lastHeading);
       this.lastHeading = pose.heading;

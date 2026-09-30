@@ -25,7 +25,9 @@ const TAU: f32 = 6.2831853;
 const SPAWN_RADIUS: f32 = 1.2;
 const ESCAPE_R2: f32 = 9.0;
 const TRICKLE_PER_SECOND: f32 = 0.12;   // 0.2 % per frame at 60 fps
-const MIN_COC: f32 = 0.7;
+const TRACER_FRACTION: f32 = 0.004;  // a few particles burn much brighter and draw visible streams
+const TRACER_WEIGHT: f32 = 22.0;
+const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
 
 fn pcg(v: u32) -> u32 {
   let s = v * 747796405u + 2891336453u;
@@ -92,8 +94,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   if (shake > 0.001) {
     let rd = unit_vec(hash3(i, bitcast<u32>(F.stirv.w), seed));
     let outward = p / max(length(p), 0.05);
-    extra = (0.55 * rd + 0.75 * outward) * shake * 2.6;
+    extra = (0.55 * rd + 0.75 * outward) * shake * 2.0;
   }
+
+  let p_before = p;
 
   // RK2 midpoint, two substeps of dt/2
   let h = 0.5 * dt;
@@ -109,8 +113,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 
   if ((F.ids.w & 2u) == 0u) { return; }
 
+  // draw at a random moment inside the frame: free motion blur that turns fast dust into streaks
+  let hj = hash3(i, frame, seed ^ 0x9e3779b9u);
+  let q_draw = mix(p_before, p, u01(pcg(hj ^ 0x85ebca6bu)));
+
   // project
-  let d = p - F.eye.xyz;
+  let d = q_draw - F.eye.xyz;
   let cz = dot(d, F.fwd.xyz);
   if (cz < F.lens.z) { return; }
   let cx = dot(d, F.right.xyz);
@@ -121,16 +129,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   var px = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * res;
 
   // stochastic depth of field: land at a random point inside the circle of confusion
-  let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + MIN_COC;
-  let hj = hash3(i, frame, seed ^ 0x9e3779b9u);
+  let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + MIN_COC_PER_850PX * max(0.75, res.y / 850.0);
   let ang = TAU * u01(hj);
   px += coc * sqrt(u01(pcg(hj))) * vec2f(cos(ang), sin(ang));
   if (px.x < 0.0 || px.y < 0.0 || px.x >= res.x || px.y >= res.y) { return; }
 
   let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
-  let col = max(shade(speed, phase, cz - F.lens.x), vec3f(0.0));
-  atomicAdd(&accum[base], u32(col.r * FIXED));
-  atomicAdd(&accum[base + 1u], u32(col.g * FIXED));
-  atomicAdd(&accum[base + 2u], u32(col.b * FIXED));
-  atomicAdd(&accum[base + 3u], u32(FIXED));
+  let wgt = select(1.0, TRACER_WEIGHT, phase < TRACER_FRACTION);
+  let col = max(shade(speed, phase, cz - F.lens.x), vec3f(0.0)) * (wgt * FIXED);
+  atomicAdd(&accum[base], u32(col.r));
+  atomicAdd(&accum[base + 1u], u32(col.g));
+  atomicAdd(&accum[base + 2u], u32(col.b));
+  atomicAdd(&accum[base + 3u], u32(wgt * FIXED));
 }

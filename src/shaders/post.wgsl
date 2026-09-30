@@ -4,7 +4,9 @@ struct Post {
   size: vec4f,  // width, height, 1/width, 1/height
   a: vec4f,     // exposure, trail, bloom, grain
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
-  c: vec4f,     // density k, pixels per particle, breath, frame
+  c: vec4f,     // density k, pixels per particle, breath, bloom level weight
+  d: vec4f,     // log gain, core gain, log contrast (gamma), bloom threshold
+  e: vec4f,     // core exponent, log ceiling
 }
 
 @group(0) @binding(0) var<uniform> P: Post;
@@ -20,25 +22,50 @@ fn vs(@builtin(vertex_index) vi: u32) -> VOut {
 }
 
 // ---------------------------------------------------------------- resolve
-@group(0) @binding(1) var<storage, read> accum: array<u32>;
+@group(0) @binding(1) var<storage, read> accum: array<vec4u>;
 @group(0) @binding(2) var prevTex: texture_2d<f32>;
 
 const FIXED: f32 = 256.0;
 
+fn cell(ip: vec2i) -> vec4f {
+  let w = i32(P.size.x);
+  let h = i32(P.size.y);
+  let c = clamp(ip, vec2i(0), vec2i(w - 1, h - 1));
+  return vec4f(accum[u32(c.y * w + c.x)]);
+}
+
+// log-density tonemap of an (rgb sum, count) cell
+fn density(cellv: vec4f) -> vec3f {
+  let cnt = cellv.w;
+  if (cnt <= 0.0) { return vec3f(0.0); }
+  let avg = cellv.rgb / cnt;
+  // density relative to a uniform spread over the screen, so brightness is resolution- and
+  // particle-count independent; the log keeps dense cores from clipping and faint wisps alive
+  let x = (cnt / FIXED) * P.c.y;
+  var g = log2(1.0 + P.c.x * x) / log2(1.0 + P.c.x * 8.0);
+  g = g / pow(1.0 + pow(g / P.e.y, 4.0), 0.25);  // soft ceiling: the log term stops short of the cores
+  // the log term carries wisps and filaments; the linear term lets the densest cores run far
+  // into HDR, which the bloom then turns into a soft halo
+  return avg * (P.d.x * pow(g, P.d.z) + P.d.y * pow(x, P.e.x));
+}
+
 @fragment
 fn fs_resolve(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let ip = vec2u(pos.xy);
-  let base = (ip.y * u32(P.size.x) + ip.x) * 4u;
-  let cnt = f32(accum[base + 3u]);
-  var cur = vec3f(0.0);
-  if (cnt > 0.0) {
-    let avg = vec3f(f32(accum[base]), f32(accum[base + 1u]), f32(accum[base + 2u])) / cnt;
-    // density relative to a uniform spread over the screen, so brightness is resolution- and
-    // particle-count independent; the log keeps dense cores from clipping and faint wisps alive
-    let x = (cnt / FIXED) * P.c.y;
-    cur = avg * (log2(1.0 + P.c.x * x) / log2(1.0 + P.c.x));
+  let ip = vec2i(pos.xy);
+  let mid = cell(ip);
+  var cur = density(mid);
+
+  // adaptive density estimation: where the splat is sparse (a few stray particles), smooth it over
+  // a 3x3 tent so dust reads as soft haze rather than speckle; dense regions stay razor sharp
+  let sparse = 1.0 - smoothstep(2.0, 10.0, mid.w / FIXED);
+  if (sparse > 0.0) {
+    var s = mid * 4.0;
+    s += (cell(ip + vec2i(-1, 0)) + cell(ip + vec2i(1, 0)) + cell(ip + vec2i(0, -1)) + cell(ip + vec2i(0, 1))) * 2.0;
+    s += cell(ip + vec2i(-1, -1)) + cell(ip + vec2i(1, -1)) + cell(ip + vec2i(-1, 1)) + cell(ip + vec2i(1, 1));
+    cur = mix(cur, density(s / 16.0), sparse);
   }
-  let prev = textureLoad(prevTex, vec2i(ip), 0).rgb;
+
+  let prev = textureLoad(prevTex, ip, 0).rgb;
   // exponential moving average: a longer effective exposure and light-painted trails
   return vec4f(mix(cur, prev, P.a.y), 1.0);
 }
@@ -49,10 +76,12 @@ fn fs_resolve(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 
 fn tap(uv: vec2f) -> vec3f { return textureSampleLevel(srcTex, samp, uv, 0.0).rgb; }
 
-fn knee(c: vec3f) -> vec3f {
+fn knee(c0: vec3f) -> vec3f {
+  // a delta-like core holds enormous energy; compress it so the halo stays a glow, not a flood
+  let c = c0 / (1.0 + max(c0.r, max(c0.g, c0.b)) / 24.0);
   // soft threshold: only what is genuinely bright feeds the halo
-  let t = 0.5;
-  let k = 0.3;
+  let t = P.d.w;
+  let k = 0.3 * t + 0.02;
   let l = max(c.r, max(c.g, c.b));
   let soft = clamp(l - t + k, 0.0, 2.0 * k);
   let contrib = max(soft * soft / (4.0 * k), l - t) / max(l, 1e-4);
@@ -85,8 +114,6 @@ fn fs_down(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   return vec4f(sum / 8.0, 1.0);
 }
 
-const UP_WEIGHT: f32 = 0.62;
-
 @fragment
 fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let texel = 1.0 / vec2f(textureDimensions(srcTex));
@@ -101,7 +128,7 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   sum += tap(uv + vec2f(h.x, -h.y)) * 2.0;
   sum += tap(uv + vec2f(0.0, -h.y * 2.0));
   sum += tap(uv + vec2f(-h.x, -h.y)) * 2.0;
-  return vec4f(sum / 12.0 * UP_WEIGHT, 1.0);
+  return vec4f(sum / 12.0 * P.c.w, 1.0);
 }
 
 // ---------------------------------------------------------------- composite
@@ -109,7 +136,9 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 @group(0) @binding(2) var bloomTex: texture_2d<f32>;
 @group(0) @binding(3) var csamp: sampler;
 
-override LINEAR_OUT: bool = false;
+override HDR_OUT: bool = false;
+const PRE_SAT: f32 = 1.6;
+const POST_SAT: f32 = 1.12;
 const BG: vec3f = vec3f(0.0015, 0.0018, 0.0030);  // #05060a in linear light
 
 // AgX (Troy Sobotka), minimal implementation with the polynomial sigmoid.
@@ -141,6 +170,13 @@ fn agx(c: vec3f) -> vec3f {
   return max(AGX_OUT * v, vec3f(0.0));
 }
 
+fn srgb_decode(e: vec3f) -> vec3f {
+  return select(pow((e + 0.055) / 1.055, vec3f(2.4)), e / 12.92, e <= vec3f(0.04045));
+}
+fn srgb_encode(l: vec3f) -> vec3f {
+  return select(1.055 * pow(l, vec3f(1.0 / 2.4)) - 0.055, l * 12.92, l <= vec3f(0.0031308));
+}
+
 fn hash12(p: vec2f, t: f32) -> f32 {
   var q = fract(vec3f(p.xyx) * 0.1031 + t * 0.0173);
   q += dot(q, q.yzx + 33.33);
@@ -164,17 +200,22 @@ fn fs_composite(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let vig = 1.0 - P.b.x * smoothstep(0.25, 1.05, r2);
   var lin = (c * P.a.x * P.c.z + bloom * P.a.z) * vig;
 
+  // AgX's input matrix desaturates by design; push chroma out first so the palette survives it
+  let y = dot(lin, vec3f(0.2126, 0.7152, 0.0722));
+  lin = max(mix(vec3f(y), lin, PRE_SAT), vec3f(0.0));
   var enc = agx(lin + BG);
+  enc = max(mix(vec3f(dot(enc, vec3f(0.2126, 0.7152, 0.0722))), enc, POST_SAT), vec3f(0.0));
 
   // fine animated grain, weighted away from the deepest blacks; also dithers the dark gradients
   let n = hash12(pos.xy, P.b.w) + hash12(pos.xy + 17.0, P.b.w + 3.7) - 1.0;
   enc = max(enc + n * P.a.w * (0.35 + enc), vec3f(0.0));
 
-  if (LINEAR_OUT) {
-    var o = pow(enc, vec3f(2.2));
-    let headroom = P.b.z;
-    o *= 1.0 + (headroom - 1.0) * smoothstep(0.3, 1.0, max(o.r, max(o.g, o.b)));
-    return vec4f(o, 1.0);
+  if (HDR_OUT) {
+    // The extended canvas takes sRGB-encoded values that may exceed 1. Lift only the highlights, in
+    // linear light, so everything below them is identical to the SDR path.
+    var o = srgb_decode(enc);
+    o *= 1.0 + (P.b.z - 1.0) * smoothstep(0.3, 1.0, max(o.r, max(o.g, o.b)));
+    return vec4f(srgb_encode(o), 1.0);
   }
   return vec4f(enc, 1.0);
 }

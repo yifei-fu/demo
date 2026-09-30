@@ -11,6 +11,7 @@ import { Quality } from './quality';
 const PHONE_PARTICLES = 262_144;
 const DESKTOP_PARTICLES = 1_048_576;
 const MAX_PARTICLES = 4_000_000;
+const MAX_IN_FLIGHT = 3;
 
 interface Flags {
   seed: number;
@@ -28,7 +29,10 @@ function parseFlags(): Flags {
   const n = Number(q.get('n'));
   const hdr = q.get('hdr');
   return {
-    seed: q.has('seed') && Number.isFinite(seedParam) ? seedParam >>> 0 : (Math.random() * 2 ** 32) >>> 0,
+    seed:
+      q.has('seed') && Number.isFinite(seedParam)
+        ? seedParam >>> 0
+        : (Math.random() * 2 ** 32) >>> 0,
     variant: q.get('v') || 'default',
     n: n > 0 ? Math.min(MAX_PARTICLES, Math.max(1024, Math.floor(n))) : null,
     debug: q.has('debug'),
@@ -87,8 +91,17 @@ async function boot(): Promise<void> {
     engine.begun = true;
   }
 
+  // dev-only handle for tuning the look from the console; stripped from production builds
+  if (import.meta.env.DEV) Object.assign(window, { __axiomEngine: engine });
+
   let fps = 0;
-  bindHooks(hooks, engine, flags.variant, () => fps, () => hud.setLaw(engine.law));
+  bindHooks(
+    hooks,
+    engine,
+    flags.variant,
+    () => fps,
+    () => hud.setLaw(engine.law),
+  );
   new ResizeObserver(() => engine.resize()).observe(canvas);
 
   // first frame: the lone point is already burning behind the gate
@@ -100,15 +113,24 @@ async function boot(): Promise<void> {
 
   let last = 0;
   let n = 0;
+  let inFlight = 0;
+  let lost = false;
+  void gpu.lost.then(() => (lost = true));
   const tick = (now: number): void => {
+    if (lost) return;
     requestAnimationFrame(tick);
     if (document.hidden) {
       last = 0;
       return;
     }
+    // If the GPU is behind, drop the frame instead of queueing more work; the interval between
+    // frames we do draw then reflects real GPU throughput, which is what adaptive quality reads.
+    if (inFlight >= MAX_IN_FLIGHT) return;
     const ms = last ? now - last : 1000 / 60;
     last = now;
     engine.advance(Math.min(ms, 1000 / 30) / 1000, true);
+    inFlight++;
+    void engine.settled().then(() => inFlight--);
 
     const change = quality.sample(ms, now);
     if (change) {

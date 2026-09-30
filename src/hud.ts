@@ -78,7 +78,13 @@ export class Hud {
 
     this.gate = el('div', 'gate');
     const head = el('header', 'gate-head');
-    head.append(el('h1', '', 'AXIOM'), el('p', 'sub', 'one law · every world between stillness and chaos'));
+    const sub = el('p', 'sub');
+    sub.append(
+      el('span', 'one', 'one law'),
+      el('span', 'sep', ' \u00b7 '),
+      el('span', 'every', 'every world between stillness and chaos'),
+    );
+    head.append(el('h1', '', 'AXIOM'), sub);
     const foot = el('footer', 'gate-foot');
     const begin = el('button', 'begin', 'Begin');
     begin.type = 'button';
@@ -86,10 +92,14 @@ export class Hud {
       if (this.gate.classList.contains('leaving')) return;
       cb.onBegin();
     });
-    foot.append(
-      el('p', 'how', 'tilt to change the law · turn to walk around it · hold to dive · shake'),
-      begin,
+    const how = el('p', 'how');
+    ['tilt to change the law', 'turn to walk around it', 'hold to dive', 'shake'].forEach(
+      (t, i) => {
+        if (i > 0) how.append(el('span', 'sep', ' \u00b7 '));
+        how.append(el('span', 'item', t));
+      },
     );
+    foot.append(how, begin);
     this.gate.append(head, foot);
 
     const readout = el('div', 'readout');

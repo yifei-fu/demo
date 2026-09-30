@@ -15,6 +15,8 @@ const SHAKE_DECAY = 3.2; // 1/s
 const APERTURE = 0.0072; // circle of confusion per unit relative depth, as a fraction of height
 const MAX_COC = 0.045; // fraction of height
 const NEAR = 0.03;
+const TAN_HALF = 0.4;
+const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
 
 export interface StirParams {
@@ -51,13 +53,14 @@ export class Particles {
   private bindGroup: GPUBindGroup | null = null;
   private shakeEnergy = 0;
   private shakeId = 0;
-  private seed: number;
-  private paletteShift: number;
+  private readonly seed: number;
+  private readonly paletteShift: number;
 
   constructor(gpu: Gpu, count: number, seed: number) {
     this.device = gpu.device;
     this.seed = seed >>> 0;
-    this.paletteShift = ((seed >>> 0) % 997) / 997 - 0.5;
+    // seed -> a small slide along the palette, so every visit has its own cast
+    this.paletteShift = ((Math.imul(seed >>> 0, 2654435761) >>> 0) / 2 ** 32) * 0.16 - 0.08;
     this.capacity = count;
     this.count = count;
     const device = gpu.device;
@@ -109,42 +112,57 @@ export class Particles {
   /** Fill the cloud (uniformly in the spawn ball) without drawing. Call once after setTarget. */
   initialise(width: number, height: number): void {
     const enc = this.device.createCommandEncoder({ label: 'init particles' });
-    this.encode(enc, {
-      cam: { eye: [0, 0, 3], right: [1, 0, 0], up: [0, 1, 0], fwd: [0, 0, -1], dist: 3, focus: 3, dive: 0, motion: 0 },
-      dt: 0,
-      time: 0,
-      frame: 0,
-      width,
-      height,
-      stir: { active: false, x: 0, y: 0, vx: 0, vy: 0, strength: 0 },
-      splat: false,
-    }, FLAG_INIT);
+    this.encode(
+      enc,
+      {
+        cam: {
+          eye: [0, 0, 3],
+          right: [1, 0, 0],
+          up: [0, 1, 0],
+          fwd: [0, 0, -1],
+          dist: 3,
+          focus: 3,
+          dive: 0,
+          motion: 0,
+        },
+        dt: 0,
+        time: 0,
+        frame: 0,
+        width,
+        height,
+        stir: { active: false, x: 0, y: 0, vx: 0, vy: 0, strength: 0 },
+        splat: false,
+      },
+      FLAG_INIT,
+    );
     this.device.queue.submit([enc.finish()]);
   }
 
   encode(encoder: GPUCommandEncoder, p: FrameParams, extraFlags = 0): void {
     if (!this.bindGroup) return;
     const { cam, width, height } = p;
-    const tanHalf = 0.4; // half-extent of the short screen side at unit depth: ball of radius ~1.25 fits at 3.2
-    const short = Math.min(width, height);
-    const focalPx = (0.5 * short) / tanHalf;
+    // The short side of the screen spans TAN_HALF at unit depth, so at the default distance the
+    // whole unit ball fits the width of a portrait phone.
+    const focalPx = (0.5 * Math.min(width, height)) / TAN_HALF;
+    const fx = focalPx / (width * 0.5);
+    const fy = focalPx / (height * 0.5);
     const f = this.f32;
-    f.set([...cam.right, (focalPx / (width * 0.5))], 0);
-    f.set([...cam.up, focalPx / (height * 0.5)], 4);
+    f.set([...cam.right, fx], 0);
+    f.set([...cam.up, fy], 4);
     f.set([...cam.fwd, 0], 8);
     f.set([...cam.eye, 0], 12);
 
     // stir ray through the touch point
     const s = p.stir;
-    const rx = s.x / (focalPx / (width * 0.5));
-    const ry = s.y / (focalPx / (height * 0.5));
+    const rx = s.x / fx;
+    const ry = s.y / fy;
     const dir = [
       cam.fwd[0] + cam.right[0] * rx + cam.up[0] * ry,
       cam.fwd[1] + cam.right[1] * rx + cam.up[1] * ry,
       cam.fwd[2] + cam.right[2] * rx + cam.up[2] * ry,
     ];
     const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
-    f.set([dir[0] / dl, dir[1] / dl, dir[2] / dl, 0.16 / (focalPx / (height * 0.5))], 16);
+    f.set([dir[0] / dl, dir[1] / dl, dir[2] / dl, STIR_RADIUS / fy], 16);
 
     this.shakeEnergy *= Math.exp(-SHAKE_DECAY * p.dt);
     if (this.shakeEnergy < 0.004) this.shakeEnergy = 0;
@@ -154,7 +172,10 @@ export class Particles {
     f.set([s.x, s.y, s.active ? s.strength : 0, 0], 28);
     f.set([s.vx, s.vy, this.shakeEnergy, this.shakeId], 32);
     f.set([this.paletteShift, 0, 0, 0], 36);
-    this.u32.set([p.frame >>> 0, this.count, this.seed, extraFlags | (p.splat ? FLAG_SPLAT : 0)], 40);
+    this.u32.set(
+      [p.frame >>> 0, this.count, this.seed, extraFlags | (p.splat ? FLAG_SPLAT : 0)],
+      40,
+    );
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);

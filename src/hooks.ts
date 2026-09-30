@@ -38,7 +38,15 @@ export function installHooks(variant: string): AxiomHooks {
     step: () => Promise.resolve(),
     shake: () => undefined,
     stir: () => undefined,
-    stats: () => ({ fps: 0, scale: 1, particles: 0, bead: [0, 0], regime: null, dky: null, variant }),
+    stats: () => ({
+      fps: 0,
+      scale: 1,
+      particles: 0,
+      bead: [0, 0],
+      regime: null,
+      dky: null,
+      variant,
+    }),
   };
   window.__axiom = hooks;
   return hooks;

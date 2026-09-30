@@ -44,7 +44,12 @@ export class Engine {
   /** Re-fit the backing store to the CSS size and adaptive scale. */
   resize(force = false): void {
     const { canvas } = this.gpu;
-    const { width, height } = backingSize(this.gpu, canvas.clientWidth || 1, canvas.clientHeight || 1, this.scale);
+    const { width, height } = backingSize(
+      this.gpu,
+      canvas.clientWidth || 1,
+      canvas.clientHeight || 1,
+      this.scale,
+    );
     if (!force && width === this.width && height === this.height) return;
     this.width = canvas.width = width;
     this.height = canvas.height = height;
@@ -114,7 +119,6 @@ export class Engine {
         { ...s, trail, breath: 1 + breathAmp * Math.sin((this.time * Math.PI * 2) / 6.5) },
         this.particles.active,
         this.time,
-        this.frame,
       );
     } else {
       this.sinceReset = 0;
@@ -126,7 +130,10 @@ export class Engine {
     return this.gpu.device.queue.onSubmittedWorkDone();
   }
 
-  private stirParams(s: { active: boolean; x: number; y: number; vx: number; vy: number }, dt: number): StirParams {
+  private stirParams(
+    s: { active: boolean; x: number; y: number; vx: number; vy: number },
+    dt: number,
+  ): StirParams {
     let active = s.active;
     let { x, y, vx, vy } = s;
     let strength = STIR_STRENGTH;

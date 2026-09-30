@@ -24,8 +24,9 @@ const HDR_HEADROOM = 1.7;
 const BYTES_PER_PIXEL = 16;
 
 export async function initGpu(canvas: HTMLCanvasElement, opts: GpuOptions): Promise<Gpu | null> {
-  if (!('gpu' in navigator)) return null;
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  const api = (navigator as { gpu?: GPU }).gpu;
+  if (!api) return null;
+  const adapter = await api.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) return null;
 
   const wanted = ['maxStorageBufferBindingSize', 'maxBufferSize'] as const;
@@ -55,7 +56,8 @@ export async function initGpu(canvas: HTMLCanvasElement, opts: GpuOptions): Prom
 
 function headroomFor(opts: GpuOptions): number {
   if (opts.hdr === '1') return HDR_HEADROOM;
-  const hdrDisplay = typeof matchMedia === 'function' && matchMedia('(dynamic-range: high)').matches;
+  const hdrDisplay =
+    typeof matchMedia === 'function' && matchMedia('(dynamic-range: high)').matches;
   return hdrDisplay ? HDR_HEADROOM : 1;
 }
 

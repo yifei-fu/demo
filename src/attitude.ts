@@ -15,7 +15,7 @@ export interface Pose {
   roll: number;
   /** Direction the screen faces, in earth frame (counter-clockwise from east, radians). */
   heading: number;
-  /** Horizontal length of the heading vector; small when the direction is ill-defined. */
+  /** How much of the heading blend was usable (0..1); small when the phone lies on its side. */
   headingConfidence: number;
 }
 
@@ -68,12 +68,28 @@ export function poseFromEuler(
   const pitch = Math.atan2(uy, uz);
   const roll = Math.atan2(-ux, Math.hypot(uy, uz));
 
-  // Screen faces -z_device. Add the horizontal parts of that and of the screen's up axis: for an
-  // upright phone the first is well-defined, for a flat one the second; in between they agree.
+  // Heading. Upright, the direction the screen faces (-z) is a clean reference: neither tilting
+  // the top away nor rolling about the screen normal moves it. Flat, the screen's up axis is.
+  // Blend the two by how upright / flat the phone is, so tilting never masquerades as turning.
+  const zEarth: Vec3 = [-R[0][2], -R[1][2], -R[2][2]];
   const yEarth: Vec3 = [dot(R[0], sy), dot(R[1], sy), dot(R[2], sy)];
-  const hx = -R[0][2] + yEarth[0];
-  const hy = -R[1][2] + yEarth[1];
-  return { pitch, roll, heading: Math.atan2(hy, hx), headingConfidence: Math.hypot(hx, hy) };
+  const wz = uy * uy;
+  const wy = uz * uz;
+  let hx = 0;
+  let hy = 0;
+  let used = 0;
+  for (const [v, w] of [
+    [zEarth, wz],
+    [yEarth, wy],
+  ] as const) {
+    const len = Math.hypot(v[0], v[1]);
+    if (len > 0.05) {
+      hx += (w * v[0]) / len;
+      hy += (w * v[1]) / len;
+      used += w;
+    }
+  }
+  return { pitch, roll, heading: Math.atan2(hy, hx), headingConfidence: used };
 }
 
 export const wrapAngle = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));

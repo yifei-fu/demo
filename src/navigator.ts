@@ -4,7 +4,8 @@ import type { Input } from './input';
 const TAU = Math.PI * 2;
 const TILT_GAIN = 1.45; // disk radii per second^2 at full tilt
 const FRICTION = 2.3; // 1/s
-const WALL_START = 0.93;
+const WALL_START = 0.9;
+const WALL_DRAG = 30;
 const IDLE_SECONDS = 20;
 const AUTOPILOT_RAMP = 6;
 
@@ -64,16 +65,24 @@ export class Bead {
       av += this.ap * ((tv - this.v) * k - this.vv * 2 * Math.sqrt(k) + FRICTION * this.vv);
     }
 
-    const r = Math.hypot(this.u, this.v);
-    if (r > WALL_START) {
-      const push = ((r - WALL_START) / (1 - WALL_START)) ** 2 * 18;
-      au -= (this.u / r) * push;
-      av -= (this.v / r) * push;
-    }
-
     const damp = Math.exp(-FRICTION * dt);
     this.vu = (this.vu + au * dt) * damp;
     this.vv = (this.vv + av * dt) * damp;
+
+    // soft rim: outward speed is bled off ever harder toward r = 1, so the bead glides to a stop
+    // against the wall and a bead resting in the rim zone stays where it was put
+    const r = Math.hypot(this.u, this.v);
+    if (r > WALL_START) {
+      const nu = this.u / r;
+      const nv = this.v / r;
+      const vr = this.vu * nu + this.vv * nv;
+      if (vr > 0) {
+        const s = (r - WALL_START) / (1 - WALL_START);
+        const keep = Math.exp(-WALL_DRAG * s * s * dt);
+        this.vu -= vr * (1 - keep) * nu;
+        this.vv -= vr * (1 - keep) * nv;
+      }
+    }
     this.u += this.vu * dt;
     this.v += this.vv * dt;
 
@@ -201,7 +210,9 @@ export class CameraRig {
 
     const logDist = Math.log(len);
     const rate =
-      (Math.abs(az - this.prevAz) + Math.abs(pitch - this.prevPitch) + Math.abs(logDist - this.prevLogDist)) /
+      (Math.abs(az - this.prevAz) +
+        Math.abs(pitch - this.prevPitch) +
+        Math.abs(logDist - this.prevLogDist)) /
       Math.max(dt, 1e-3);
     s.motion += (rate - s.motion) * (1 - Math.exp(-dt / 0.12));
     this.prevAz = az;

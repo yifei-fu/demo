@@ -4,11 +4,8 @@ import postWgsl from './shaders/post.wgsl?raw';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 const BLOOM_LEVELS = 5;
-const UNIFORM_FLOATS = 16;
+const UNIFORM_FLOATS = 24;
 const ACCUM_BYTES_PER_PIXEL = 16;
-/** Density gain of the log curve; larger lifts faint wisps relative to the dense cores. */
-const DENSITY_K = 6;
-
 export interface PostSettings {
   exposure: number;
   trail: number;
@@ -17,16 +14,39 @@ export interface PostSettings {
   vignette: number;
   ca: number;
   breath: number;
+  /** k of log(1 + k x): larger lifts faint wisps relative to the dense cores. */
+  densityK: number;
+  logGain: number;
+  /** Linear-in-density term: how far the densest cores run into HDR. */
+  coreGain: number;
+  /** Contrast of the log term: above 1 pushes sparse dust down and keeps filaments bright. */
+  contrast: number;
+  /** Exponent of the core term: below 1 keeps a point-like source from swallowing the frame. */
+  coreExp: number;
+  /** Where the log term stops (in units of its own curve); the core term takes over above it. */
+  logCeiling: number;
+  /** Luminance below which nothing feeds the bloom. */
+  bloomThreshold: number;
+  /** Weight of each successive (wider) bloom level. */
+  bloomSpread: number;
 }
 
 export const DEFAULT_POST: PostSettings = {
-  exposure: 1,
+  exposure: 3.5,
   trail: 0.85,
-  bloom: 0.32,
+  bloom: 1.1,
   grain: 0.011,
   vignette: 0.42,
   ca: 0.0045,
   breath: 1,
+  densityK: 3,
+  logGain: 0.006,
+  coreGain: 0.0143,
+  contrast: 1.4,
+  coreExp: 0.7,
+  logCeiling: 1.0,
+  bloomThreshold: 0.3,
+  bloomSpread: 0.9,
 };
 
 interface Level {
@@ -105,7 +125,7 @@ export class Post {
     this.downPipe = make('bloom down', 'fs_down', HDR_FORMAT);
     this.upPipe = make('bloom up', 'fs_up', HDR_FORMAT, undefined, true);
     this.compositePipe = make('composite', 'fs_composite', gpu.format, {
-      LINEAR_OUT: gpu.extended ? 1 : 0,
+      HDR_OUT: gpu.extended ? 1 : 0,
     });
   }
 
@@ -141,7 +161,11 @@ export class Post {
     this.resolveBG = [0, 1].map((i) =>
       device.createBindGroup({
         layout: this.resolvePipe.getBindGroupLayout(0),
-        entries: [pb, { binding: 1, resource: { buffer: this.accum } }, { binding: 2, resource: view(this.hdr[i ^ 1]) }],
+        entries: [
+          pb,
+          { binding: 1, resource: { buffer: this.accum } },
+          { binding: 2, resource: view(this.hdr[i ^ 1]) },
+        ],
       }),
     );
     this.downFirstBG = [0, 1].map((i) =>
@@ -156,13 +180,20 @@ export class Post {
       this.downBG.push(
         device.createBindGroup({
           layout: this.downPipe.getBindGroupLayout(0),
-          entries: [{ binding: 1, resource: view(this.bloom[i - 1]) }, { binding: 2, resource: smp }],
+          entries: [
+            { binding: 1, resource: view(this.bloom[i - 1]) },
+            { binding: 2, resource: smp },
+          ],
         }),
       );
       this.upBG.push(
         device.createBindGroup({
           layout: this.upPipe.getBindGroupLayout(0),
-          entries: [{ binding: 1, resource: view(this.bloom[i]) }, { binding: 2, resource: smp }],
+          entries: [
+            pb,
+            { binding: 1, resource: view(this.bloom[i]) },
+            { binding: 2, resource: smp },
+          ],
         }),
       );
     }
@@ -190,19 +221,35 @@ export class Post {
     s: PostSettings,
     particleCount: number,
     time: number,
-    frame: number,
   ): void {
     const d = this.data;
     d.set([this.width, this.height, 1 / this.width, 1 / this.height], 0);
     d.set([s.exposure, s.trail, s.bloom, s.grain], 4);
     d.set([s.vignette, s.ca, this.gpu.hdrHeadroom, time % 1000], 8);
-    d.set([DENSITY_K, (this.width * this.height) / Math.max(1, particleCount), s.breath, frame % 4096], 12);
+    d.set(
+      [
+        s.densityK,
+        (this.width * this.height) / Math.max(1, particleCount),
+        s.breath,
+        s.bloomSpread,
+      ],
+      12,
+    );
+    d.set([s.logGain, s.coreGain, s.contrast, s.bloomThreshold], 16);
+    d.set([s.coreExp, s.logCeiling, 0, 0], 20);
     this.device.queue.writeBuffer(this.params, 0, d);
 
     const cur = this.flip;
-    const full = (view: GPUTextureView, pipe: GPURenderPipeline, bg: GPUBindGroup, load: GPULoadOp = 'clear'): void => {
+    const full = (
+      view: GPUTextureView,
+      pipe: GPURenderPipeline,
+      bg: GPUBindGroup,
+      load: GPULoadOp = 'clear',
+    ): void => {
       const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view, loadOp: load, storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+        colorAttachments: [
+          { view, loadOp: load, storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
+        ],
       });
       pass.setPipeline(pipe);
       pass.setBindGroup(0, bg);
@@ -212,7 +259,8 @@ export class Post {
 
     full(this.hdr[cur].view, this.resolvePipe, this.resolveBG[cur]);
     full(this.bloom[0].view, this.downFirstPipe, this.downFirstBG[cur]);
-    for (let i = 1; i < BLOOM_LEVELS; i++) full(this.bloom[i].view, this.downPipe, this.downBG[i - 1]);
+    for (let i = 1; i < BLOOM_LEVELS; i++)
+      full(this.bloom[i].view, this.downPipe, this.downBG[i - 1]);
     for (let i = BLOOM_LEVELS - 2; i >= 0; i--)
       full(this.bloom[i].view, this.upPipe, this.upBG[i], 'load');
     full(target, this.compositePipe, this.compositeBG[cur]);

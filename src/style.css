@@ -66,7 +66,8 @@ body {
   flex-direction: column;
   justify-content: space-between;
   align-items: center;
-  padding: calc(var(--sat) + 9dvh) calc(var(--sar) + 28px) calc(var(--sab) + 7dvh) calc(var(--sal) + 28px);
+  padding: calc(var(--sat) + 9dvh) calc(var(--sar) + 28px) calc(var(--sab) + 7dvh)
+    calc(var(--sal) + 28px);
   text-align: center;
   pointer-events: auto;
   transition: opacity 1.4s cubic-bezier(0.4, 0, 0.2, 1);
@@ -87,24 +88,42 @@ body {
 }
 .gate .sub {
   margin: 22px auto 0;
-  max-width: 24em;
   font-size: 10px;
   font-weight: 400;
-  letter-spacing: 0.3em;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
-  line-height: 1.9;
+  line-height: 2;
   color: var(--dim);
-  text-wrap: balance;
+}
+.gate .sub .one,
+.gate .sub .every,
+.gate .how .item {
+  white-space: nowrap;
+}
+.gate .sub .one {
+  color: var(--text);
+  opacity: 0.85;
 }
 .gate .how {
   margin: 0 auto 30px;
-  max-width: 26em;
-  font-size: 10px;
-  letter-spacing: 0.22em;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  line-height: 2;
+  line-height: 2.1;
   color: var(--faint);
-  text-wrap: balance;
+}
+@media (max-width: 520px) {
+  .gate .sub .sep {
+    display: none;
+  }
+  .gate .sub .one,
+  .gate .sub .every {
+    display: block;
+  }
+  .gate .sub .every {
+    letter-spacing: 0.2em;
+    font-size: 9.5px;
+  }
 }
 .begin {
   appearance: none;
@@ -121,7 +140,9 @@ body {
   cursor: pointer;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 0 34px rgba(120, 150, 255, 0.14), inset 0 0 18px rgba(160, 185, 255, 0.06);
+  box-shadow:
+    0 0 34px rgba(120, 150, 255, 0.14),
+    inset 0 0 18px rgba(160, 185, 255, 0.06);
   transition:
     transform 0.25s ease,
     border-color 0.25s ease,
@@ -141,7 +162,9 @@ body {
 }
 @keyframes pulse {
   50% {
-    box-shadow: 0 0 52px rgba(120, 150, 255, 0.28), inset 0 0 22px rgba(160, 185, 255, 0.1);
+    box-shadow:
+      0 0 52px rgba(120, 150, 255, 0.28),
+      inset 0 0 22px rgba(160, 185, 255, 0.1);
   }
 }
 
@@ -261,8 +284,10 @@ body {
     rgba(210, 225, 255, 0.5) 0,
     rgba(120, 150, 255, 0.22) 5%,
     rgba(90, 70, 210, 0.1) 18%,
-    rgba(40, 30, 120, 0.04) 40%,
-    transparent 68%
+    rgba(60, 45, 160, 0.05) 32%,
+    rgba(40, 30, 120, 0.02) 46%,
+    rgba(30, 24, 100, 0.006) 58%,
+    transparent 70%
   );
   animation: breathe 6.5s ease-in-out infinite;
 }
@@ -275,7 +300,9 @@ body {
   translate: -50% -50%;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 10px 2px rgba(255, 255, 255, 0.9), 0 0 36px 10px rgba(150, 175, 255, 0.5);
+  box-shadow:
+    0 0 10px 2px rgba(255, 255, 255, 0.9),
+    0 0 36px 10px rgba(150, 175, 255, 0.5);
   animation: breathe-point 6.5s ease-in-out infinite;
 }
 .fallback h1 {
@@ -288,7 +315,7 @@ body {
 }
 .fallback p {
   position: relative;
-  margin: 0;
+  margin: 0 auto;
   max-width: 24em;
   font-size: 11px;
   letter-spacing: 0.2em;
