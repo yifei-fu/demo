@@ -73,6 +73,8 @@ export class Particles {
   equalise = 0;
   radius = 0.8;
   depthCue = 0;
+  /** Share of respawns that copy a settled particle (volume-filling attractors). */
+  cloneShare = 0;
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;

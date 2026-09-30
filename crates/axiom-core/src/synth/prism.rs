@@ -3,7 +3,7 @@
 //! octave above its tone; the probe's x sets the FM index, y the pan, and its
 //! natural level the loudness, so a fixed point is silent and a Hopf swells.
 
-use super::dsp::pan_gains;
+use super::dsp::{pan_gains, Rise};
 use super::{Ctx, ProbeView, LEVEL_REF, PROBES};
 use std::f32::consts::TAU;
 
@@ -11,13 +11,32 @@ use std::f32::consts::TAU;
 const RATIOS: [f32; PROBES] = [3.0, 2.0, 3.0, 2.0, 3.0, 2.0];
 /// Half of the chorus spread: ±3 cents.
 const DETUNE: f32 = 0.0017;
-const GAIN: f32 = 0.15;
+const GAIN: f32 = 0.17;
 
-#[derive(Default)]
 pub struct Prism {
     carrier: [[f32; 2]; PROBES],
     modulator: [f32; PROBES],
     x_slow: [f32; PROBES],
+    /// Onset swell of the whole voice.
+    rise: Rise,
+}
+
+/// Where the voice's swell starts from (amplitude of the summed bells).
+const RISE_FLOOR: f32 = 0.012;
+
+impl Default for Prism {
+    /// The bells are harmonics of one fundamental, so their partials coincide.
+    /// Started in phase they would add coherently, and the whole voice would
+    /// swing by ±8 dB with the pan positions; spread the phases instead.
+    fn default() -> Prism {
+        let spread = |k: usize, step: f32| (k as f32 * step).fract() * TAU;
+        Prism {
+            carrier: std::array::from_fn(|k| [spread(k, 0.618), spread(k, 0.618) + 2.1]),
+            modulator: std::array::from_fn(|k| spread(k + 1, 0.382)),
+            x_slow: [0.0; PROBES],
+            rise: Rise::default(),
+        }
+    }
 }
 
 impl Prism {
@@ -36,12 +55,15 @@ impl Prism {
                     (self.carrier[k][j] + TAU * fc * (1.0 + sign * DETUNE) / ctx.sr) % TAU;
                 bell += (self.carrier[k][j] + m).sin();
             }
-            let a = (p.level / LEVEL_REF).min(3.5 * p.ceil).min(1.0);
+            let a = (p.level / LEVEL_REF).min(1.0);
             let v = 0.5 * bell * a * GAIN * p.amp / 0.45;
             let (gl, gr) = pan_gains(p.pan);
             l += v * gl;
             r += v * gr;
         }
-        (l, r)
+        // The bells are harmonics of one fundamental: however their pans and
+        // levels combine, the sum may not rise faster than the swell rate.
+        let g = self.rise.gain(l.abs().max(r.abs()), RISE_FLOOR, ctx);
+        (l * g, r * g)
     }
 }

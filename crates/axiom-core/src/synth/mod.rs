@@ -10,8 +10,14 @@
 //!
 //! Presets (`synth_set` id 4) are different *voices* on the same probes, law,
 //! drone, wind and reverb; switching cross-fades them. 0 · classic tones,
-//! 1 · Ink (plucks at every z = 0 crossing), 2 · Prism (FM glass),
-//! 3 · Abyss (deep, swept, bubbling).
+//! 1 · Ink (a pluck whenever a probe crosses its own section), 2 · Prism (FM
+//! glass), 3 · Abyss (deep, swept, bubbling, with a shimmer of high lights).
+//!
+//! Three things make the raw dynamics presentable. Onsets are *swells*: a
+//! bifurcation grows in milliseconds at audio-rate probes, so a rise limiter
+//! (`dsp::Rise`) keeps any level from climbing faster than 20 dB per second.
+//! Every voice has energy above 200 Hz (phone speakers give nothing below),
+//! generated from the probes' own motion, and the presets are level matched.
 
 mod abyss;
 mod classic;
@@ -25,7 +31,7 @@ use crate::anchors::{norm, rk4, V3};
 use crate::law::Law;
 use crate::reverb::Fdn;
 use crate::rng::Rng;
-use dsp::{lowpass_coeff, smoothing, white, Ramp};
+use dsp::{lowpass_coeff, smoothing, white, Ramp, Rise};
 use std::f64::consts::TAU;
 
 pub const MAX_FRAMES: usize = 256;
@@ -37,19 +43,22 @@ const HARMONICS: [f32; 8] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0];
 const STIR_KICK: f32 = 6.0e-4;
 /// Probe level above which the slow follower turns the gain down.
 pub(crate) const LEVEL_REF: f32 = 0.22;
-/// Onset swell: a probe's level may rise no faster than a ceiling that climbs
-/// `SWELL_RATE` dB per second toward `SWELL_HEADROOM` times the level and
-/// follows it back down after `SWELL_RELEASE`. A Hopf bifurcation grows in
-/// milliseconds at audio-rate probes; this turns that pop into a swell.
-const SWELL_RATE_DB: f32 = 15.0;
+/// Onset swell (see `dsp::Rise`): a level may rise no faster than a ceiling
+/// that climbs `SWELL_RATE_DB` dB per second toward `SWELL_HEADROOM` times the
+/// level and follows it back down after `SWELL_RELEASE` seconds. A Hopf
+/// bifurcation grows in milliseconds at audio-rate probes; this turns that pop
+/// into a swell of about a second (20 dB/s is 2 dB per 100 ms, under the ~3 dB
+/// that is heard as a step). It is applied to each probe's signal, and to the
+/// whole Prism voice, whose phase-locked bells add coherently.
+const SWELL_RATE_DB: f32 = 20.0;
 const SWELL_RELEASE: f32 = 0.25;
-const SWELL_HEADROOM: f32 = 2.0;
+const SWELL_HEADROOM: f32 = 1.4;
 /// Level (in x units) the ceiling never falls below.
-const SWELL_FLOOR: f32 = 0.025;
+const SWELL_FLOOR: f32 = 0.012;
 /// The peak detector's hold time.
 const SWELL_HOLD: f32 = 0.03;
 /// Running-mean time (world units) of the plane Ink cuts its rhythm at.
-const SECTION_MEAN: f32 = 10.0;
+const SECTION_MEAN: f32 = 3.0;
 /// World speed below which a probe counts as resting (for `rest_boost`).
 const REST_SPEED: f32 = 0.06;
 /// The limiter starts pulling the gain down when the output peaks above this
@@ -139,7 +148,7 @@ impl Preset {
     /// noise. Nothing is heard while a probe rests, so its clock may race.
     fn rest_boost(self) -> f32 {
         match self {
-            Preset::Ink => 30.0,
+            Preset::Ink => 100.0,
             _ => 0.0,
         }
     }
@@ -170,9 +179,8 @@ struct Probe {
     dc_y: f32,
     ms: f32,
     speed: f32,
-    /// Peak detector on `dc` and the onset-swell ceiling above it.
-    peak: f32,
-    ceil: f32,
+    /// Onset swell on `dc`.
+    rise: Rise,
     /// Running mean of z in world time (the Poincaré section Ink cuts at).
     zm: f32,
 }
@@ -194,8 +202,9 @@ pub(crate) struct ProbeView {
     pub swell: f32,
     /// z minus its running mean: the height above the probe's own section.
     pub dz: f32,
-    /// The ceiling that gain enforces on the probe's peak (x units).
-    pub ceil: f32,
+    /// Its clock relative to natural time: 1, or well below while the probe
+    /// rests and its clock races (see `Preset::rest_boost`).
+    pub clock: f32,
 }
 
 /// Slowly varying settings shared by all voices for the current block.
@@ -211,7 +220,22 @@ pub(crate) struct Ctx {
     pub swell_up: f32,
     pub swell_down: f32,
     /// The peak detector's per-sample decay.
-    swell_hold: f32,
+    pub swell_hold: f32,
+}
+
+impl Ctx {
+    pub(crate) fn new(sr: f32, root_hz: f32) -> Ctx {
+        Ctx {
+            sr,
+            root_hz,
+            stir: 0.0,
+            lp_a: 0.1,
+            rms_k: smoothing(1.0 / sr, 0.4),
+            swell_up: (SWELL_RATE_DB * std::f32::consts::LN_10 / 20.0 / sr).exp(),
+            swell_down: smoothing(1.0 / sr, SWELL_RELEASE),
+            swell_hold: 1.0 - smoothing(1.0 / sr, SWELL_HOLD),
+        }
+    }
 }
 
 pub struct Synth {
@@ -272,8 +296,7 @@ impl Synth {
                 dc_y: 0.0,
                 ms: 0.0,
                 speed: 0.0,
-                peak: 0.0,
-                ceil: SWELL_FLOOR,
+                rise: Rise::default(),
                 zm: x[2] as f32,
             }
         });
@@ -299,16 +322,7 @@ impl Synth {
                 Ramp::new(0.0),
             ],
             probes,
-            ctx: Ctx {
-                sr,
-                root_hz,
-                stir: 0.0,
-                lp_a: 0.1,
-                rms_k: smoothing(1.0 / sr, 0.4),
-                swell_up: (SWELL_RATE_DB * std::f32::consts::LN_10 / 20.0 / sr).exp(),
-                swell_down: smoothing(1.0 / sr, SWELL_RELEASE),
-                swell_hold: 1.0 - smoothing(1.0 / sr, SWELL_HOLD),
-            },
+            ctx: Ctx::new(sr, root_hz),
             classic: classic::Classic::default(),
             ink: ink::Ink::new(sr),
             prism: prism::Prism::default(),
@@ -368,7 +382,7 @@ impl Synth {
         for p in self.probes.iter_mut() {
             p.x = self.rng.in_ball(1.1);
             // Not an onset: let the scattered probes be heard at once.
-            p.ceil = 1.0;
+            p.rise.lift(1.0);
         }
         self.wind.whoosh();
     }
@@ -394,7 +408,7 @@ impl Synth {
     fn cutoff_coeff(&self) -> f32 {
         // Chaos is brighter than a cycle; diving opens the filter a little.
         let cut = 600.0
-            * (self.dky * 1.15).exp2()
+            * (self.dky * 1.15 * std::f32::consts::LN_2).exp()
             * (1.0 + 0.7 * self.dive.cur)
             * (1.0 + 0.5 * self.chaos());
         lowpass_coeff(cut.min(7_000.0), self.sr)
@@ -459,14 +473,7 @@ impl Synth {
             p.dc_x = s;
             p.dc_y = dc;
             p.ms += self.ctx.rms_k * (dc * dc - p.ms);
-            p.peak = dc.abs().max(p.peak * self.ctx.swell_hold);
-            let goal = SWELL_HEADROOM * p.peak + SWELL_FLOOR;
-            p.ceil = if goal > p.ceil {
-                goal.min(p.ceil * self.ctx.swell_up)
-            } else {
-                p.ceil + self.ctx.swell_down * (goal - p.ceil)
-            };
-            let swell = if p.peak > p.ceil { p.ceil / p.peak } else { 1.0 };
+            let swell = p.rise.gain(dc, SWELL_FLOOR, &self.ctx);
             let target = (p.pan_bias + 1.1 * x[1] as f32).clamp(-1.0, 1.0);
             p.pan += 0.002 * (target - p.pan);
             *view = ProbeView {
@@ -479,7 +486,7 @@ impl Synth {
                 amp: p.amp,
                 swell,
                 dz: x[2] as f32 - p.zm,
-                ceil: p.ceil,
+                clock: 1.0 / rest,
             };
         }
         views

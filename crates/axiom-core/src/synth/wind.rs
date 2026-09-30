@@ -7,8 +7,8 @@ use std::f64::consts::TAU;
 /// A shake: the whoosh rises over 50 ms (soft, no click) and its level falls
 /// as e^(-2t/1.3 s), so it stands ~7 dB proud of the music for half a second
 /// and has settled after ~1.5 s.
-const WHOOSH_GAIN: f32 = 2.2;
-const WHOOSH_DECAY: f32 = 1.3;
+const WHOOSH_GAIN: f32 = 1.8;
+const WHOOSH_DECAY: f32 = 1.15;
 const WHOOSH_ATTACK: f32 = 0.05;
 
 #[derive(Default)]

@@ -12,6 +12,8 @@ import { LAW_LEN } from './law';
 import type { Core, SpectrumReading } from './wasm';
 
 const STIR_STRENGTH = 1;
+/** Largest share of respawns copied from the cloud itself, in a fully volume-filling attractor. */
+const CLONE_MAX = 0.9;
 /** Extra trail persistence at full dive (the steadier the camera, the more it applies). */
 const DIVE_TRAIL = 0.09;
 const MAX_TRAIL = 0.95;
@@ -155,6 +157,7 @@ export class Engine {
     this.particles.refSpeed = this.framing.refSpeed;
     this.particles.equalise = this.framing.equalise;
     this.particles.radius = this.framing.size;
+    this.particles.cloneShare = this.framing.volume * CLONE_MAX;
     this.particles.depthCue = this.framing.volume * (1 - this.rig.state.dive);
     const cam = this.rig.update(
       input,

@@ -67,7 +67,9 @@ impl Fdn {
     /// a click. `rt60` in seconds, `damp` in 0..1 (higher = darker).
     pub fn set_decay(&mut self, rt60: f32, damp: f32) {
         for (g, line) in self.target_gain.iter_mut().zip(&self.lines) {
-            *g = 10f32.powf(-3.0 * line.len() as f32 / (self.sample_rate * rt60.max(0.05)));
+            *g = (-3.0 * std::f32::consts::LN_10 * line.len() as f32
+                / (self.sample_rate * rt60.max(0.05)))
+            .exp();
         }
         self.target_damp = damp.clamp(0.0, 0.95);
     }

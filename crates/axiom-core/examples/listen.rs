@@ -138,11 +138,13 @@ fn schedule(seed: u32, events: bool) -> Vec<Tick> {
         if events {
             let active = t >= STIR.0 && t < STIR.1;
             let tau: f64 = if active { 0.08 } else { 0.25 };
-            stir_gain += (f64::from(u8::from(active)) - stir_gain) * (1.0 - (-(1.0 / 30.0) / tau).exp());
+            stir_gain +=
+                (f64::from(u8::from(active)) - stir_gain) * (1.0 - (-(1.0 / 30.0) / tau).exp());
             if stir_gain < 0.002 {
                 stir_gain = 0.0;
             }
-            let level = (stir_gain * 0.85 * (0.85 + 0.15 * (2.0 * PI * 1.3 * t).sin())).min(1.0) as f32;
+            let level =
+                (stir_gain * 0.85 * (0.85 + 0.15 * (2.0 * PI * 1.3 * t).sin())).min(1.0) as f32;
             if (level - sent_s).abs() >= 0.004 || (level == 0.0 && sent_s != 0.0) {
                 tick.stir = Some(level);
                 sent_s = level;
@@ -191,18 +193,14 @@ fn render(preset: u32, root: f32, seed: u32, ticks: &[Tick]) -> (Vec<f32>, Vec<f
             r[s + i] = out[2 * i + 1];
         }
         s += QUANTUM;
-        if s % 4800 == 0 {
-            counts.push(synth.pluck_count());
-        }
+        counts.push(synth.pluck_count());
     }
     if preset == 1 && std::env::var("PLUCKS").is_ok() && ticks.iter().all(|t| !t.shake) {
-        let d: Vec<String> = counts
-            .windows(2)
-            .enumerate()
-            .filter(|(i, _)| (46..80).contains(i))
-            .map(|(_, w)| (w[1] - w[0]).to_string())
+        let at = |t: f64| counts[((t * SR as f64) as usize / QUANTUM).min(counts.len() - 1)];
+        let per_second: Vec<String> = (0..24)
+            .map(|i| (at(i as f64 + 1.0) - at(i as f64)).to_string())
             .collect();
-        println!("plucks per 100 ms, 4.6..8 s: {}", d.join(" "));
+        println!("plucks per second, 0..24 s: {}", per_second.join(" "));
     }
     (l, r)
 }
@@ -409,13 +407,15 @@ fn main() {
         if only.as_deref().is_some_and(|o| !name.starts_with(o)) {
             continue;
         }
+        let started = std::time::Instant::now();
         let (cl, cr) = render(preset, root, seed, &control_ticks);
+        let speed = DURATION / started.elapsed().as_secs_f64();
         let (el, er) = render(preset, root, seed, &event_ticks);
         let control = Audio { l: cl, r: cr };
         let events = Audio { l: el, r: er };
         let (_, all_db, all_peak) = rms_peak(&events, 0.0, DURATION);
         println!(
-            "\n== {name}  preset {preset} root {root}  peak {all_peak:.3}  rms {all_db:.1} dB"
+            "\n== {name}  preset {preset} root {root}  peak {all_peak:.3}  rms {all_db:.1} dB  ({speed:.0}x real time natively)"
         );
         println!("seg          rmsdB  >200Hz   peak  centroid <200Hz% HF>4k%");
         let mut rows = Vec::new();
@@ -455,9 +455,14 @@ fn main() {
                 worst = (d, i as f64 * 0.1);
             }
         }
-        println!("steepest rise 2..8 s: {:.1} dB / 100 ms @ {:.1} s", worst.0, worst.1);
+        println!(
+            "steepest rise 2..8 s: {:.1} dB / 100 ms @ {:.1} s",
+            worst.0, worst.1
+        );
         let centre_db = rows[0].db;
-        let onset = (16..st.len()).find(|&i| st[i] > centre_db + 6.0).map(|i| i as f64 * 0.1);
+        let onset = (16..st.len())
+            .find(|&i| st[i] > centre_db + 6.0)
+            .map(|i| i as f64 * 0.1);
         let onset_r = onset.map(|t| {
             let (u, v) = bead(t);
             (u * u + v * v).sqrt()
@@ -471,7 +476,10 @@ fn main() {
             band_db(&control, STIR.0, STIR.1 + 0.2, 500.0, 4000.0),
             band_db(&events, STIR.0, STIR.1 + 0.2, 500.0, 4000.0),
         );
-        println!("stir mid band 0.5-4 kHz: {:.1} -> {:.1} dB", stir_mid.0, stir_mid.1);
+        println!(
+            "stir mid band 0.5-4 kHz: {:.1} -> {:.1} dB",
+            stir_mid.0, stir_mid.1
+        );
         // shake: events minus control, 100 ms windows from the shake
         let delta: Vec<f64> = (0..40)
             .map(|i| {
@@ -501,7 +509,10 @@ fn main() {
         ));
     }
     println!("\n== loudness relative to default (dB) and share of energy above 200 Hz (%)");
-    let reference = summary.iter().find(|s| s.0 == "default").map(|s| s.1.clone());
+    let reference = summary
+        .iter()
+        .find(|s| s.0 == "default")
+        .map(|s| s.1.clone());
     for (name, db, hi) in &summary {
         let rel: Vec<String> = (1..9)
             .map(|i| match &reference {

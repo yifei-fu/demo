@@ -12,7 +12,7 @@ struct Frame {
   lens: vec4f,    // focus distance, aperture (px), near plane, max CoC (px)
   stir: vec4f,    // touch ndc x, y, strength, dive amount
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
-  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
+  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride, clone-respawn share
   probe: vec4f,   // xyz: centre the extent histogram is measured from, w: the attractor's radius
   tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor, depth cue strength
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
@@ -27,6 +27,7 @@ struct Frame {
 const FIXED: f32 = 256.0;
 const TAU: f32 = 6.2831853;
 const SPAWN_RADIUS: f32 = 1.2;
+const CLONE_JITTER: f32 = 0.004;     // world units: well under the lattice period (0.09)
 const ESCAPE_R2: f32 = 2.56;             // respawn beyond |x| = 1.6
 const TRICKLE_PER_SECOND: f32 = 0.12;   // 0.2 % per frame at 60 fps
 // Newcomers are still falling toward the attractor. They are dim and wear one calm hue until they
@@ -70,6 +71,15 @@ fn unit_vec(h: u32) -> vec3f {
   let a = TAU * u01(pcg(h));
   let s = sqrt(max(0.0, 1.0 - z * z));
   return vec3f(s * cos(a), s * sin(a), z);
+}
+
+// Three independent standard normals (Box-Muller on hashed uniforms).
+fn gauss3(h: u32) -> vec3f {
+  let h1 = pcg(h);
+  let h2 = pcg(h1);
+  let a = sqrt(-2.0 * log(max(u01(h), 1e-6)));
+  let b = sqrt(-2.0 * log(max(u01(h1), 1e-6)));
+  return vec3f(a * cos(TAU * u01(h2)), a * sin(TAU * u01(h2)), b * cos(TAU * u01(pcg(h2))));
 }
 
 fn is_finite3(p: vec3f) -> bool {
@@ -163,6 +173,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     p = dir * r;
     // the initial cloud gets staggered ages, so the first frames are not all newborn
     born = F.screen.w - select(0.0, 8.0 * u01(hash3(i, 0x2545f491u, seed)), init);
+
+    // In a volume-filling attractor (misc.w > 0) most respawns copy a settled particle instead.
+    // Thomas' flow is a near-conservative lattice; folded through it, the hard edge of a freshly
+    // seeded ball becomes a faint periodic weave (about 2 % of the density), and injecting a new
+    // ball every second keeps it alive. Copying the cloud itself injects no new edge, so the
+    // population stays the attractor's own measure and the weave decays instead.
+    if (!init && u01(hash3(i, frame * 3u + 5u, seed)) < F.misc.w) {
+      let src = parts[hash3(i, frame * 3u + 6u, seed) % F.ids.y];
+      if (is_finite3(src.xyz) && dot(src.xyz, src.xyz) < 1.96 && F.screen.w - src.w > SETTLED_END) {
+        p = src.xyz + CLONE_JITTER * gauss3(hash3(i, frame * 3u + 7u, seed));
+        born = F.screen.w - 1.2 * SETTLED_END;
+      }
+    }
   }
   let age = F.screen.w - born;
   // stable per particle for its whole life, redrawn at every respawn
@@ -220,7 +243,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   let depth = cz - F.lens.x;
 
   let settled = smoothstep(SETTLED_START, SETTLED_END, age);
-  let calm = mix(REFERENCE_SPEED, speed, settled);
+  // In a volume-filling attractor the flow field is a periodic lattice (Thomas: sin x, sin y, sin z),
+  // so colouring by speed would print that lattice onto the fog as regular bands. There the hue
+  // comes from the typical speed instead, and the depth cue and streaks carry the structure.
+  let shown_speed = mix(speed, F.tone.x, F.tone.w);
+  let calm = mix(REFERENCE_SPEED, shown_speed, settled);
   let col = shade(calm, phase, depth, F.misc.x);
   let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION && settled < 1.0;
   // Dwell equalisation: an extended attractor piles particles up where the flow is slow (near its

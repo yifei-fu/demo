@@ -61,7 +61,9 @@ export class Framing {
     this.refSpeed += (ref - this.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
     // A law that is not a stable fixed point makes slow particles a hotspot straight away, even if
     // most of the cloud has not left the old star yet; only a true fixed point keeps its star.
-    const gate = regime === 0 ? smoothstep(POINT_RADIUS, POINT_FULL, this.radius) : 1;
+    // Volume-filling fog has no hotspot, and weighting a periodic speed field only prints it.
+    const gate =
+      (regime === 0 ? smoothstep(POINT_RADIUS, POINT_FULL, this.radius) : 1) * (1 - this.volume);
     this.equalise += (gate - this.equalise) * (1 - Math.exp(-dt / TAU_EQUALISE));
     const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, this.radius / RADIUS_AT_UNITY));
     const target = Math.log(fit) * smoothstep(POINT_RADIUS, POINT_FULL, this.radius);

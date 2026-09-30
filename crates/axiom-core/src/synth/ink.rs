@@ -1,11 +1,20 @@
 //! Preset 1 · Ink — a Poincaré-section rhythm.
 //!
 //! The probes run at rhythm speed (a few Hz) instead of audio rate. Every time
-//! a probe crosses the plane z = 0 upward, a Karplus–Strong pluck sounds; its
+//! a probe crosses its own section upward, a Karplus–Strong pluck sounds; its
 //! pitch is a just-intonation degree chosen by where it crossed (x, quantised).
-//! A cycle therefore gives a steady ostinato, a torus a quasi-periodic pattern,
-//! chaos an irregular but tonal rain, a fixed point silence. The continuous
-//! probe voice is a very quiet hum on the last pitch of each probe.
+//! The section is the plane through the probe's running mean height (a cycle
+//! whose centre is not at z = 0 still crosses it once per turn). A cycle
+//! therefore gives a steady ostinato, a torus a quasi-periodic pattern, chaos
+//! an irregular but tonal rain, a fixed point silence. The continuous probe
+//! voice is a very quiet hum on the last pitch of each probe, tuned to the
+//! root.
+//!
+//! A slow probe would take many seconds to grow a cycle out of the noise, so
+//! while it rests its clock races (`Preset::rest_boost`); it only plays once it
+//! is moving at its own pace, and its first notes fade in with the swell.
+//! Notes are soft (a low-passed burst) and struck harder the sparser they are,
+//! so a lone rain of notes is as present as a busy ostinato.
 
 use super::dsp::{pan_gains, white};
 use super::{Ctx, ProbeView, PROBES};
@@ -27,12 +36,24 @@ const SCALE: [f32; 10] = [
 ];
 const VOICES: usize = 16;
 /// A probe must sink this far below its own section before it can strike
-/// again, so jitter around the plane cannot machine-gun a note.
-const HYSTERESIS: f32 = 0.02;
+/// again, so noise around the plane cannot machine-gun a note.
+const HYSTERESIS: f32 = 0.012;
 /// ... and at least this long (s) must pass between two of its strikes.
 const MIN_GAP: f32 = 0.08;
+/// A probe whose clock races (it rests, see `Preset::rest_boost`) is not
+/// playing yet: it strikes only once its clock is at least this close to
+/// natural time, so the burst of a cycle taking off is never a machine gun.
+const MIN_CLOCK: f32 = 0.3;
+/// Loudness compensation: a texture of sparse notes is quieter than a busy
+/// ostinato, so each note is struck harder the fewer there are. `RATE_REF`
+/// notes per second (over the last `RATE_TAU` seconds) is the reference; the
+/// gain is limited to `[GAIN_MIN, GAIN_MAX]`.
+const RATE_REF: f32 = 8.0;
+const RATE_TAU: f32 = 3.0;
+const GAIN_MIN: f32 = 0.8;
+const GAIN_MAX: f32 = 2.0;
 /// Pluck loudness at full vigour (RMS of the initial burst).
-const STRIKE: f32 = 0.4;
+const STRIKE: f32 = 0.30;
 /// The burst is low-passed noise, `SOFT_REST + SOFT_HARD · vigour` being the
 /// one-pole coefficient: a soft touch is felt, a hard one only a little
 /// brighter (centroid ≈ 1.2 kHz, not the 3 kHz of a raw noise burst).
@@ -92,8 +113,8 @@ impl Pluck {
         // Loop delay = len + 0.5 (the average) + all-pass fraction in [0.5, 1.5).
         let frac = (delay - 0.5 - self.len as f32).clamp(0.5, 1.5);
         self.a = (1.0 - frac) / (1.0 + frac);
-        let t60 = (1.6 * (220.0 / freq).powf(0.4)).clamp(0.35, 2.5);
-        self.decay = 10f32.powf(-3.0 / (freq * t60));
+        let t60 = (1.6 * (220.0 / freq).sqrt()).clamp(0.35, 2.5);
+        self.decay = (-3.0 * std::f32::consts::LN_10 / (freq * t60)).exp();
         // Burst of low-passed noise, normalised and stripped of DC.
         let norm = 1.0 / (bright / (2.0 - bright) / 3.0).sqrt();
         let mut s = 0.0;
@@ -147,6 +168,8 @@ pub struct Ink {
     hum_phase: [f32; PROBES],
     hum_amp: [f32; PROBES],
     plucks: u64,
+    /// Strikes per second, averaged over `RATE_TAU`.
+    rate: f32,
 }
 
 impl Ink {
@@ -162,6 +185,7 @@ impl Ink {
             hum_phase: [0.0; PROBES],
             hum_amp: [0.0; PROBES],
             plucks: 0,
+            rate: 0.0,
         }
     }
 
@@ -191,10 +215,14 @@ impl Ink {
                     .min_by(|&a, &b| self.pool[a].env.total_cmp(&self.pool[b].env))
                     .unwrap_or(0)
             });
+        self.rate += 1.0 / RATE_TAU;
+        let gain = (RATE_REF / self.rate.max(0.5))
+            .sqrt()
+            .clamp(GAIN_MIN, GAIN_MAX);
         self.pool[slot].strike(
             freq,
             self.sample_rate,
-            STRIKE * vigour,
+            STRIKE * gain * vigour,
             p.pan,
             SOFT_REST + SOFT_HARD * vigour,
             rng,
@@ -205,6 +233,7 @@ impl Ink {
 
     pub fn tick(&mut self, probes: &[ProbeView; PROBES], ctx: &Ctx, rng: &mut Rng) -> (f32, f32) {
         let (mut l, mut r) = (0.0, 0.0);
+        self.rate -= self.rate / (RATE_TAU * self.sample_rate);
         for (k, p) in probes.iter().enumerate() {
             // Vigour: how hard the probe moves. It may not rise faster than the
             // swell ceiling, so an ostinato fades in instead of starting cold.
@@ -220,7 +249,11 @@ impl Ink {
             self.since[k] += 1.0 / self.sample_rate;
             if p.dz < -HYSTERESIS {
                 self.armed[k] = true;
-            } else if self.armed[k] && p.dz >= 0.0 && self.since[k] >= MIN_GAP {
+            } else if self.armed[k]
+                && p.dz >= 0.0
+                && p.clock > MIN_CLOCK
+                && self.since[k] >= MIN_GAP
+            {
                 self.armed[k] = false;
                 self.since[k] = 0.0;
                 self.strike(k, p, vigour, ctx, rng);
@@ -269,6 +302,56 @@ mod tests {
         let (a, b, c) = (corr(best - 1), corr(best), corr(best + 1));
         let off = 0.5 * (a - c) / (a - 2.0 * b + c);
         sr / (best as f32 + off)
+    }
+
+    fn ctx(root_hz: f32) -> Ctx {
+        Ctx::new(48_000.0, root_hz)
+    }
+
+    /// Power of `x` at `hz` (Goertzel).
+    fn power_at(x: &[f32], hz: f32, sr: f32) -> f32 {
+        let w = TAU * hz / sr;
+        let (mut re, mut im) = (0.0, 0.0);
+        for (n, v) in x.iter().enumerate() {
+            re += v * (w * n as f32).cos();
+            im += v * (w * n as f32).sin();
+        }
+        re * re + im * im
+    }
+
+    #[test]
+    fn notes_and_hum_follow_the_root() {
+        let mut ink = Ink::new(48_000.0);
+        for k in 0..PROBES {
+            for degree in 0..SCALE.len() {
+                let (a, b) = (
+                    ink.note(k, degree, &ctx(65.4)),
+                    ink.note(k, degree, &ctx(130.8)),
+                );
+                assert!((b / a - 2.0).abs() < 1e-3, "probe {k} degree {degree}");
+            }
+        }
+        // Before any note has been struck the probes hum on the tonic of the
+        // root (an octave lower for the two lowest), not on a fixed 220 Hz.
+        let mut rng = Rng::new(1, 1);
+        let moving = [ProbeView {
+            speed: 1.0,
+            ..ProbeView::default()
+        }; PROBES];
+        let hum: Vec<f32> = (0..48_000)
+            .map(|_| {
+                let (l, r) = ink.tick(&moving, &ctx(65.4), &mut rng);
+                l + r
+            })
+            .skip(24_000)
+            .collect();
+        let tonic = power_at(&hum, 4.0 * 65.4, 48_000.0);
+        let old = power_at(&hum, 220.0, 48_000.0);
+        assert!(
+            tonic > 100.0 * old,
+            "hum at the tonic {tonic}, at 220 Hz {old}"
+        );
+        assert!(power_at(&hum, 2.0 * 65.4, 48_000.0) > 100.0 * old);
     }
 
     #[test]

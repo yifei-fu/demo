@@ -1,6 +1,9 @@
 //! Preset 3 · Abyss — deep and oceanic. Probes run an octave lower, through a
 //! resonant low-pass swept by their z coordinate, under slow swells; stir
-//! raises bubbles (short rising sine pings) instead of wind.
+//! raises bubbles (short rising sine pings) instead of wind. Above the deep
+//! body floats a shimmer: one soft, twinkling light per probe high in the
+//! harmonic series of the root, brighter as its probe moves, so the voice
+//! reaches a phone speaker and not only headphones.
 
 use super::dsp::{pan_gains, svf_coeff, white, Svf};
 use super::{Ctx, ProbeView, LEVEL_REF, PROBES};
@@ -15,9 +18,9 @@ const SHIMMER: [f32; PROBES] = [12.0, 15.0, 18.0, 20.0, 24.0, 30.0];
 const SHIMMER_MAX: f32 = 2_200.0;
 /// Weight of the probes' deep body, of the lights at rest and of the extra
 /// light a moving probe wakes.
-const BODY: f32 = 0.46;
+const BODY: f32 = 0.40;
 const GLOW_REST: f32 = 0.03;
-const GLOW_MOVING: f32 = 0.39;
+const GLOW_MOVING: f32 = 0.42;
 const BUBBLES: usize = 8;
 /// Bubbles per second at full stir.
 const BUBBLE_RATE: f32 = 16.0;
