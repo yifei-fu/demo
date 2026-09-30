@@ -19,6 +19,8 @@ const MIN_SAMPLES = 96;
 const PERCENTILE = 0.9;
 /** The reference speed is this percentile of the sampled speeds: the slowest 40 % are dimmed. */
 const SPEED_PERCENTILE = 0.4;
+/** How fast the orbit really moves, whatever piles up on it: the speed the slowest 80 % stay under. */
+const FAST_PERCENTILE = 0.8;
 
 export interface Extent {
   /** centroid of the settled particles */
@@ -27,6 +29,8 @@ export interface Extent {
   radius: number;
   /** a typical (slowish) speed of the settled particles, in world units per second */
   speed: number;
+  /** the speed of the quick part of the flow (see FAST_PERCENTILE) */
+  fast: number;
 }
 
 export class ExtentProbe {
@@ -37,7 +41,7 @@ export class ExtentProbe {
   private pending: Promise<void> | null = null;
   private wanted = false;
   private latest: Extent | null = null;
-  private readonly out: Extent = { center: [0, 0, 0], radius: 0, speed: 0 };
+  private readonly out: Extent = { center: [0, 0, 0], radius: 0, speed: 0, fast: 0 };
 
   constructor(device: GPUDevice) {
     this.buffer = device.createBuffer({
@@ -104,15 +108,8 @@ export class ExtentProbe {
     const inBin = w[4 + bin] || 1;
     this.out.radius = ((bin + (target - seen) / inBin) * HIST_RANGE) / HIST_BINS;
 
-    const seenTarget = SPEED_PERCENTILE * n;
-    let sSeen = 0;
-    let sBin = 0;
-    const sBase = 4 + HIST_BINS;
-    while (sBin < SPEED_BINS - 1 && sSeen + w[sBase + sBin] < seenTarget)
-      sSeen += w[sBase + sBin++];
-    const sIn = w[sBase + sBin] || 1;
-    const octave = sBin + (seenTarget - sSeen) / sIn;
-    this.out.speed = 2 ** (SPEED_BASE + octave / SPEED_PER_OCTAVE);
+    this.out.speed = speedAt(w, SPEED_PERCENTILE * n);
+    this.out.fast = speedAt(w, FAST_PERCENTILE * n);
 
     // the next histogram is measured from where the cloud actually is
     this.probe[0] = c[0];
@@ -120,4 +117,14 @@ export class ExtentProbe {
     this.probe[2] = c[2];
     this.latest = this.out;
   }
+}
+
+/** The speed below which `target` of the sampled particles move, read off the speed histogram. */
+function speedAt(w: Int32Array, target: number): number {
+  const base = 4 + HIST_BINS;
+  let seen = 0;
+  let bin = 0;
+  while (bin < SPEED_BINS - 1 && seen + w[base + bin] < target) seen += w[base + bin++];
+  const octave = bin + (target - seen) / (w[base + bin] || 1);
+  return 2 ** (SPEED_BASE + octave / SPEED_PER_OCTAVE);
 }

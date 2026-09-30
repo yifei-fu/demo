@@ -195,7 +195,7 @@ export class Particles {
     const probe = this.extent.probe;
     vec4(f, 40, probe[0], probe[1], probe[2], tone.radius);
     vec4(f, 44, tone.refSpeed, tone.equalise, DWELL_FLOOR, tone.depthCue);
-    vec4(f, 48, tone.dky, tone.still, 0, 0);
+    vec4(f, 48, tone.dky, tone.still, tone.hollow, tone.fast);
     const u = this.u32;
     u[52] = p.frame >>> 0;
     u[53] = this.count;

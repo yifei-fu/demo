@@ -15,7 +15,7 @@ struct Frame {
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride (w unused)
   probe: vec4f,   // xyz: centre the extent histogram is measured from, w: the attractor's radius
   tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor, depth cue strength
-  live: vec4f,    // eased Kaplan-Yorke dimension, still-point flag (see axiom_dky / axiom_still)
+  live: vec4f,    // eased Kaplan-Yorke dimension, still-point flag (axiom_dky / axiom_still), hollow-orbit flag, fast speed
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -57,6 +57,13 @@ const HIST_RANGE: f32 = 2.0;
 const SPEED_BINS: u32 = 48u;
 const SPEED_BASE: f32 = -8.0;
 const SPEED_PER_OCTAVE: f32 = 3.0;
+// On a closed orbit (or torus) the inside is empty. A cloud that was gathered on the old law's
+// fixed point takes many seconds to leave a newly repelling focus, and being most of the cloud it
+// is not "slow" by any yardstick of its own; it would burn a bright spot in the middle of the
+// loop. Whatever old, slow matter lingers deep inside is recycled like an escapee instead.
+const RECYCLE_PER_SECOND: f32 = 3.0;
+const INTERIOR: f32 = 0.3;           // of the attractor's radius, from its centre
+const LINGERING: f32 = 0.4;          // of the fast speed
 const DWELL_POWER: f32 = 2.4;        // slow particles count for less than in proportion to their speed
 const DEPTH_CUE: f32 = 2.0;          // e-folds of dimming across the attractor at full strength
 const STREAK_LEN: f32 = 0.14;        // world units; streak length for volume-filling attractors
@@ -84,6 +91,15 @@ fn is_finite3(p: vec3f) -> bool {
   let m = vec3u(0x7f800000u);
   let b = bitcast<vec3u>(p) & m;
   return all(b != m);
+}
+
+// True for old, slow matter lingering deep inside a closed orbit (see RECYCLE_PER_SECOND).
+fn stranded(p: vec3f, age: f32, h: u32) -> bool {
+  let hollow = F.live.z;
+  if (hollow <= 0.0 || age < SETTLED_END) { return false; }
+  if (u01(h) >= RECYCLE_PER_SECOND * hollow * F.screen.z) { return false; }
+  if (length(p - F.probe.xyz) > INTERIOR * F.probe.w) { return false; }
+  return length(f_world_of(law, p)) < LINGERING * F.live.w;
 }
 
 // Vortex around the touch ray plus a push along the finger's motion.
@@ -161,10 +177,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   var p = q.xyz;
   var born = q.w;  // simulation time at which this particle last (re)spawned
 
-  // respawn: initial fill, escaped or NaN, and a steady trickle so streams keep flowing in
+  // respawn: initial fill, escaped or NaN, stranded inside a closed orbit, and a steady trickle
+  // so streams keep flowing in
   let init = (F.ids.w & 1u) != 0u;
   let h0 = hash3(i, frame, seed);
-  if (init || !is_finite3(p) || dot(p, p) > ESCAPE_R2 || u01(h0) < TRICKLE_PER_SECOND * dt) {
+  if (init || !is_finite3(p) || dot(p, p) > ESCAPE_R2 || u01(h0) < TRICKLE_PER_SECOND * dt ||
+      stranded(p, F.screen.w - born, pcg(h0))) {
     let h1 = hash3(i, frame * 3u + 1u, seed);
     let dir = unit_vec(h1);
     let r = SPAWN_RADIUS * pow(u01(hash3(i, frame * 3u + 2u, seed)), 1.0 / 3.0);
