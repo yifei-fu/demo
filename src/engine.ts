@@ -55,7 +55,7 @@ export class Engine {
     this.height = canvas.height = height;
     this.post.resize(width, height);
     this.particles.setTarget(this.post.accum);
-    if (this.frame === 0) this.particles.initialise(width, height);
+    if (this.frame === 0) this.particles.initialise(width, height, this.rig.state);
     this.sinceReset = 0;
   }
 

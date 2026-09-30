@@ -110,31 +110,11 @@ export class Particles {
   }
 
   /** Fill the cloud (uniformly in the spawn ball) without drawing. Call once after setTarget. */
-  initialise(width: number, height: number): void {
+  initialise(width: number, height: number, cam: CameraState): void {
     const enc = this.device.createCommandEncoder({ label: 'init particles' });
-    this.encode(
-      enc,
-      {
-        cam: {
-          eye: [0, 0, 3],
-          right: [1, 0, 0],
-          up: [0, 1, 0],
-          fwd: [0, 0, -1],
-          dist: 3,
-          focus: 3,
-          dive: 0,
-          motion: 0,
-        },
-        dt: 0,
-        time: 0,
-        frame: 0,
-        width,
-        height,
-        stir: { active: false, x: 0, y: 0, vx: 0, vy: 0, strength: 0 },
-        splat: false,
-      },
-      FLAG_INIT,
-    );
+    const stir = { active: false, x: 0, y: 0, vx: 0, vy: 0, strength: 0 };
+    const frame = { cam, dt: 0, time: 0, frame: 0, width, height, stir, splat: false };
+    this.encode(enc, frame, FLAG_INIT);
     this.device.queue.submit([enc.finish()]);
   }
 

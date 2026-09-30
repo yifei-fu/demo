@@ -4,10 +4,20 @@ struct Post {
   size: vec4f,  // width, height, 1/width, 1/height
   a: vec4f,     // exposure, trail, bloom, grain
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
-  c: vec4f,     // density k, pixels per particle, breath, bloom level weight
-  d: vec4f,     // log gain, core gain, log contrast (gamma), bloom threshold
-  e: vec4f,     // core exponent, log ceiling
+  c: vec4f,     // pixels per particle, breath
 }
+
+// How splatted density becomes light. Wisps come from a compressive log term, filaments and
+// ribbons from a power law, and a point-like core is allowed to run far into HDR.
+const DENSITY_K: f32 = 3.0;
+const LOG_GAIN: f32 = 0.006;
+const LOG_CONTRAST: f32 = 1.4;
+const LOG_CEILING: f32 = 1.0;
+const CORE_GAIN: f32 = 0.0143;
+const CORE_EXP: f32 = 0.7;
+// Bloom: soft threshold and the weight of each successively wider level.
+const BLOOM_THRESHOLD: f32 = 0.3;
+const BLOOM_SPREAD: f32 = 0.9;
 
 @group(0) @binding(0) var<uniform> P: Post;
 
@@ -41,12 +51,10 @@ fn density(cellv: vec4f) -> vec3f {
   let avg = cellv.rgb / cnt;
   // density relative to a uniform spread over the screen, so brightness is resolution- and
   // particle-count independent; the log keeps dense cores from clipping and faint wisps alive
-  let x = (cnt / FIXED) * P.c.y;
-  var g = log2(1.0 + P.c.x * x) / log2(1.0 + P.c.x * 8.0);
-  g = g / pow(1.0 + pow(g / P.e.y, 4.0), 0.25);  // soft ceiling: the log term stops short of the cores
-  // the log term carries wisps and filaments; the linear term lets the densest cores run far
-  // into HDR, which the bloom then turns into a soft halo
-  return avg * (P.d.x * pow(g, P.d.z) + P.d.y * pow(x, P.e.x));
+  let x = (cnt / FIXED) * P.c.x;
+  var g = log2(1.0 + DENSITY_K * x) / log2(1.0 + DENSITY_K * 8.0);
+  g = g / pow(1.0 + pow(g / LOG_CEILING, 4.0), 0.25);  // soft ceiling: the log term stops short of the cores
+  return avg * (LOG_GAIN * pow(g, LOG_CONTRAST) + CORE_GAIN * pow(x, CORE_EXP));
 }
 
 @fragment
@@ -80,7 +88,7 @@ fn knee(c0: vec3f) -> vec3f {
   // a delta-like core holds enormous energy; compress it so the halo stays a glow, not a flood
   let c = c0 / (1.0 + max(c0.r, max(c0.g, c0.b)) / 24.0);
   // soft threshold: only what is genuinely bright feeds the halo
-  let t = P.d.w;
+  let t = BLOOM_THRESHOLD;
   let k = 0.3 * t + 0.02;
   let l = max(c.r, max(c.g, c.b));
   let soft = clamp(l - t + k, 0.0, 2.0 * k);
@@ -128,7 +136,7 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   sum += tap(uv + vec2f(h.x, -h.y)) * 2.0;
   sum += tap(uv + vec2f(0.0, -h.y * 2.0));
   sum += tap(uv + vec2f(-h.x, -h.y)) * 2.0;
-  return vec4f(sum / 12.0 * P.c.w, 1.0);
+  return vec4f(sum / 12.0 * BLOOM_SPREAD, 1.0);
 }
 
 // ---------------------------------------------------------------- composite
@@ -198,7 +206,7 @@ fn fs_composite(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   );
   let bloom = textureSampleLevel(bloomTex, csamp, uv, 0.0).rgb;
   let vig = 1.0 - P.b.x * smoothstep(0.25, 1.05, r2);
-  var lin = (c * P.a.x * P.c.z + bloom * P.a.z) * vig;
+  var lin = (c * P.a.x * P.c.y + bloom * P.a.z) * vig;
 
   // AgX's input matrix desaturates by design; push chroma out first so the palette survives it
   let y = dot(lin, vec3f(0.2126, 0.7152, 0.0722));

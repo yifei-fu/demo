@@ -4,31 +4,20 @@ import postWgsl from './shaders/post.wgsl?raw';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 const BLOOM_LEVELS = 5;
-const UNIFORM_FLOATS = 24;
+const UNIFORM_FLOATS = 16;
 const ACCUM_BYTES_PER_PIXEL = 16;
 export interface PostSettings {
+  /** Scene-referred gain ahead of the tonemap. */
   exposure: number;
+  /** Trail persistence: weight of the previous frame in the running average. */
   trail: number;
   bloom: number;
   grain: number;
   vignette: number;
+  /** Chromatic aberration at the frame corners, as a fraction of the frame. */
   ca: number;
+  /** Slow multiplicative pulse on the exposure. */
   breath: number;
-  /** k of log(1 + k x): larger lifts faint wisps relative to the dense cores. */
-  densityK: number;
-  logGain: number;
-  /** Linear-in-density term: how far the densest cores run into HDR. */
-  coreGain: number;
-  /** Contrast of the log term: above 1 pushes sparse dust down and keeps filaments bright. */
-  contrast: number;
-  /** Exponent of the core term: below 1 keeps a point-like source from swallowing the frame. */
-  coreExp: number;
-  /** Where the log term stops (in units of its own curve); the core term takes over above it. */
-  logCeiling: number;
-  /** Luminance below which nothing feeds the bloom. */
-  bloomThreshold: number;
-  /** Weight of each successive (wider) bloom level. */
-  bloomSpread: number;
 }
 
 export const DEFAULT_POST: PostSettings = {
@@ -39,21 +28,11 @@ export const DEFAULT_POST: PostSettings = {
   vignette: 0.42,
   ca: 0.0045,
   breath: 1,
-  densityK: 3,
-  logGain: 0.006,
-  coreGain: 0.0143,
-  contrast: 1.4,
-  coreExp: 0.7,
-  logCeiling: 1.0,
-  bloomThreshold: 0.3,
-  bloomSpread: 0.9,
 };
 
 interface Level {
   tex: GPUTexture;
   view: GPUTextureView;
-  w: number;
-  h: number;
 }
 
 export class Post {
@@ -190,7 +169,6 @@ export class Post {
         device.createBindGroup({
           layout: this.upPipe.getBindGroupLayout(0),
           entries: [
-            pb,
             { binding: 1, resource: view(this.bloom[i]) },
             { binding: 2, resource: smp },
           ],
@@ -226,17 +204,7 @@ export class Post {
     d.set([this.width, this.height, 1 / this.width, 1 / this.height], 0);
     d.set([s.exposure, s.trail, s.bloom, s.grain], 4);
     d.set([s.vignette, s.ca, this.gpu.hdrHeadroom, time % 1000], 8);
-    d.set(
-      [
-        s.densityK,
-        (this.width * this.height) / Math.max(1, particleCount),
-        s.breath,
-        s.bloomSpread,
-      ],
-      12,
-    );
-    d.set([s.logGain, s.coreGain, s.contrast, s.bloomThreshold], 16);
-    d.set([s.coreExp, s.logCeiling, 0, 0], 20);
+    d.set([(this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
     this.device.queue.writeBuffer(this.params, 0, d);
 
     const cur = this.flip;
@@ -274,7 +242,7 @@ export class Post {
       format: HDR_FORMAT,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
-    return { tex, view: tex.createView(), w, h };
+    return { tex, view: tex.createView() };
   }
 
   private destroy(): void {
