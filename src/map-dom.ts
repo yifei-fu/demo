@@ -9,13 +9,14 @@ const TAP_SLOP = 12;
 const TAP_MS = 500;
 const PINCH_MS = 300;
 const MAX_BACKING = 2048;
-/** Legend swatches: the palette's own colours at D = 0, 1, 2, 3. */
-const LEGEND: readonly (readonly [string, string])[] = [
-  ['0', '#5b6a95'],
-  ['1', '#4f83ff'],
-  ['2', '#ffb347'],
-  ['3', '#ffffff'],
-];
+/** How far the canvas reaches from its centre, in disk radii: room for the rim furniture. The
+ *  lens shader has the same constant. */
+export const EXTENT = 1.1;
+/** The legend's numerals take the lens's own light at D = 0, 1, 2, 3. */
+const LEGEND: Record<'dark' | 'light', readonly string[]> = {
+  dark: ['#5d6788', '#a3c1ff', '#f0d29a', '#fbf9f2'],
+  light: ['#b1a78f', '#5f6f9c', '#8e6c3c', '#161b2e'],
+};
 
 export interface ViewEvents {
   /** Dragging on the open map: u right, v up, inside the unit disk. */
@@ -51,10 +52,12 @@ export class MapView {
   constructor(
     host: HTMLElement,
     accent: string,
+    theme: 'dark' | 'light',
     private readonly events: ViewEvents,
   ) {
     const { root, disk } = this;
     root.style.setProperty('--axm-accent', accent);
+    root.dataset.theme = theme;
     disk.tabIndex = 0;
     disk.setAttribute('role', 'button');
     disk.setAttribute('aria-label', 'Parameter map');
@@ -64,11 +67,11 @@ export class MapView {
     const scrim = el('div', 'axm-scrim');
     const legend = el('div', 'axm-legend');
     legend.append('D');
-    LEGEND.forEach(([label, colour], i) => {
+    LEGEND[theme].forEach((colour, i) => {
       if (i > 0) legend.append(Object.assign(el('span', 'sep'), { textContent: '·' }));
       const s = el('i', '');
       s.style.setProperty('--c', colour);
-      s.textContent = label;
+      s.textContent = String(i);
       legend.append(s);
     });
     const close = el('button', 'axm-close');
@@ -104,7 +107,8 @@ export class MapView {
     this.bu = u;
     this.bv = v;
     const s = this.size;
-    this.bead.style.transform = `translate(${((u + 1) * s) / 2}px, ${((1 - v) * s) / 2}px)`;
+    const k = 1 / EXTENT; // the disk fills 1/EXTENT of the box
+    this.bead.style.transform = `translate(${((u * k + 1) * s) / 2}px, ${((1 - v * k) * s) / 2}px)`;
   }
 
   /** Animate between the lens and the full-screen map. Safe to call mid-flight. */
@@ -115,6 +119,7 @@ export class MapView {
     for (const a of this.anims) a.cancel();
     this.anims.length = 0;
     this.root.classList.toggle('is-open', open);
+    document.body.classList.toggle('map-open', open);
     this.disk.setAttribute('aria-expanded', String(open));
     // Opening draws at the final size at once (a big canvas shrunk stays crisp); closing keeps
     // the big canvas until it has arrived.
@@ -151,6 +156,7 @@ export class MapView {
     this.abort.abort();
     this.resizer.disconnect();
     for (const a of this.anims) a.cancel();
+    document.body.classList.remove('map-open');
     this.root.remove();
   }
 
@@ -242,8 +248,8 @@ export class MapView {
 
   private pick(e: PointerEvent): void {
     const r = this.disk.getBoundingClientRect();
-    let u = ((e.clientX - r.left) / r.width) * 2 - 1;
-    let v = 1 - ((e.clientY - r.top) / r.height) * 2;
+    let u = (((e.clientX - r.left) / r.width) * 2 - 1) * EXTENT;
+    let v = (1 - ((e.clientY - r.top) / r.height) * 2) * EXTENT;
     const m = Math.hypot(u, v);
     if (m > 1) {
       u /= m;

@@ -1,16 +1,32 @@
-/* The lens and its full-screen map. Everything lives under .map-host (see style.css). */
+/* The lens and its full-screen map. Everything lives under .map-host (see style.css).
+   The box is EXTENT (1.1) disk radii across, so the lens itself is ~76px inside its 84px box and
+   the open map has room for its rim furniture. */
 .axm-map {
-  --axm-lens: 76px;
-  --axm-lens-bottom: calc(var(--sab, 0px) + 74px);
-  --axm-open: min(90vw, 90dvh);
+  --axm-lens: 84px;
+  --axm-lens-bottom: calc(var(--sab, 0px) + 70px);
+  --axm-open: min(98vw, 98dvh);
   --axm-bead: 4px;
   --axm-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --axm-dim: rgba(200, 210, 245, 0.5);
+  --axm-faint: rgba(190, 200, 240, 0.34);
+  --axm-text: rgba(226, 232, 255, 0.9);
+  --axm-veil: 3, 4, 8;
+  --axm-bead-core: #fff;
+  --axm-bead-glow: color-mix(in srgb, var(--axm-accent, #9db8ff) 60%, transparent);
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
+.axm-map[data-theme='light'] {
+  --axm-dim: rgba(40, 46, 70, 0.55);
+  --axm-faint: rgba(40, 46, 70, 0.4);
+  --axm-text: rgba(24, 28, 46, 0.9);
+  --axm-veil: 243, 238, 226;
+  --axm-bead-core: #161b2e;
+  --axm-bead-glow: color-mix(in srgb, var(--axm-accent, #3a4a7a) 40%, transparent);
+}
 .axm-map.is-open {
-  --axm-bead: 10px;
+  --axm-bead: 9px;
 }
 
 .axm-scrim {
@@ -18,9 +34,9 @@
   inset: 0;
   background: radial-gradient(
     circle at 50% 50%,
-    rgba(3, 4, 8, 0.42) 0,
-    rgba(3, 4, 8, 0.72) 70%,
-    rgba(3, 4, 8, 0.86) 100%
+    rgba(var(--axm-veil), 0.4) 0,
+    rgba(var(--axm-veil), 0.74) 70%,
+    rgba(var(--axm-veil), 0.88) 100%
   );
   opacity: 0;
   touch-action: none;
@@ -58,28 +74,31 @@
 .axm-disk:focus-visible::after {
   content: '';
   position: absolute;
-  inset: -4px;
+  inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(230, 236, 255, 0.7);
+  border: 1px solid var(--axm-dim);
 }
 
-/* a breath of light around the disk, only when it is the whole screen */
+/* a breath of light behind the map, only when it is the whole screen */
 .axm-disk::before {
   content: '';
   position: absolute;
-  inset: -16%;
+  inset: -6%;
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--axm-accent, #9db8ff) 20%, transparent) 40%,
-    transparent 68%
+    color-mix(in srgb, var(--axm-accent, #9db8ff) 18%, transparent) 46%,
+    transparent 70%
   );
   opacity: 0;
   transition: opacity 0.6s var(--axm-ease);
   pointer-events: none;
 }
 .axm-map.is-open .axm-disk::before {
-  opacity: 0.55;
+  opacity: 0.5;
+}
+.axm-map[data-theme='light'].is-open .axm-disk::before {
+  opacity: 0;
 }
 
 .axm-canvas {
@@ -113,13 +132,13 @@
   border-radius: 50%;
 }
 .axm-bead::before {
-  background: #fff;
+  background: var(--axm-bead-core);
   box-shadow:
-    0 0 3px 0.5px rgba(255, 255, 255, 0.8),
-    0 0 9px 2px color-mix(in srgb, var(--axm-accent, #9db8ff) 60%, transparent);
+    0 0 3px 0.5px var(--axm-bead-core),
+    0 0 9px 2px var(--axm-bead-glow);
 }
 .axm-bead::after {
-  border: 1px solid color-mix(in srgb, var(--axm-accent, #9db8ff) 80%, #fff);
+  border: 1px solid var(--axm-bead-glow);
   animation: axm-pulse 3.6s ease-out infinite;
 }
 @keyframes axm-pulse {
@@ -129,7 +148,7 @@
   }
   70%,
   100% {
-    transform: scale(2.8);
+    transform: scale(2.6);
     opacity: 0;
   }
 }
@@ -140,12 +159,12 @@
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(50% + var(--axm-open) / 2 + 18px);
+  top: calc(50% + var(--axm-open) / 2 + 6px);
   text-align: center;
-  font: 400 9.5px/1 var(--mono, ui-monospace, monospace);
-  letter-spacing: 0.22em;
+  font: 400 9px/1 var(--mono, ui-monospace, monospace);
+  letter-spacing: 0.3em;
   text-transform: uppercase;
-  color: var(--faint, rgba(190, 200, 240, 0.4));
+  color: var(--axm-faint);
   opacity: 0;
   transition: opacity 0.5s ease;
   pointer-events: none;
@@ -153,11 +172,11 @@
 }
 .axm-legend i {
   font-style: normal;
-  margin: 0 0.5em;
+  margin: 0 0.6em;
   color: var(--c);
 }
 .axm-legend .sep {
-  opacity: 0.5;
+  opacity: 0.4;
 }
 .axm-map.is-open .axm-legend {
   opacity: 1;
@@ -176,7 +195,7 @@
   background: none;
   border: 0;
   padding: 0;
-  color: var(--dim, rgba(200, 210, 245, 0.5));
+  color: var(--axm-dim);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -189,14 +208,14 @@
   height: 18px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.4;
+  stroke-width: 1.2;
   stroke-linecap: round;
 }
 .axm-close:hover {
-  color: var(--text, #e2e8ff);
+  color: var(--axm-text);
 }
 .axm-close:focus-visible {
-  outline: 1px solid rgba(230, 236, 255, 0.7);
+  outline: 1px solid var(--axm-dim);
   outline-offset: -6px;
   border-radius: 50%;
 }
@@ -213,6 +232,11 @@
     left: calc(var(--sal, 0px) + 18px);
     right: auto;
     text-align: left;
+  }
+  /* the wide map covers the centre-bottom readout: let it fade while the map is open */
+  body.map-open .readout {
+    opacity: 0;
+    transition: opacity 0.35s ease;
   }
 }
 

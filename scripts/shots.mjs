@@ -2,8 +2,14 @@
 // Visual-QA harness for AXIOM. Drives the engine through window.__axiom (docs/DESIGN.md §5),
 // writes screenshots + contact sheets, and exits 1 on any console/page error or failed check.
 //
-//   node scripts/shots.mjs [--mode grid|sweep|sensors|gate|all] [--desktop] [--v a,b]
-//        [--n 65536] [--seed 1] [--frames 180] [--out dir] [--url base | --port 5172]
+//   node scripts/shots.mjs [--mode grid|sweep|sensors|gate|variants|hero|all] [--desktop] [--v a,b]
+//        [--n 65536] [--seed 1] [--frames 180] [--query "k=v&k=v"] [--out dir]
+//        [--url base | --port 5172]
+//
+//   all      = grid, sweep, sensors, gate (any mode list may be comma-separated)
+//   variants = matrix sheet, rows = every --v id (required), columns = 7 fixed positions
+//   hero     = per --v id, three phone stills at 430x932 @2x plus a triptych (slow;
+//              defaults n=262144, frames=300)
 //
 // Logs go to stderr; the final JSON summary goes to stdout (and <out>/summary.json).
 
@@ -24,25 +30,24 @@ const { values: a } = parseArgs({
     port: { type: 'string', default: '5172' },
     out: { type: 'string' },
     v: { type: 'string' },
-    n: { type: 'string', default: '65536' },
+    n: { type: 'string' },
     seed: { type: 'string', default: '1' },
-    frames: { type: 'string', default: '180' },
+    frames: { type: 'string' },
+    query: { type: 'string' },
     desktop: { type: 'boolean', default: false },
     mode: { type: 'string', default: 'all' },
-    sheet: { type: 'string', default: '1200' },
+    sheet: { type: 'string' },
   },
 });
 const ALL_MODES = ['grid', 'sweep', 'sensors', 'gate'];
+const MODE_NAMES = [...ALL_MODES, 'variants', 'hero'];
 const modes = a.mode === 'all' ? ALL_MODES : a.mode.split(',');
-const badMode = modes.find((m) => !ALL_MODES.includes(m));
-if (badMode)
-  (console.error(`unknown --mode ${badMode} (grid|sweep|sensors|gate|all, comma-separated)`),
-    process.exit(2));
+const die = (msg) => (console.error(msg), process.exit(2));
+const badMode = modes.find((m) => !MODE_NAMES.includes(m));
+if (badMode) die(`unknown --mode ${badMode} (${MODE_NAMES.join('|')}|all, comma-separated)`);
+if (modes.includes('variants') && !a.v) die('--mode variants needs --v id,id,...');
 const OPT = {
-  n: Number(a.n),
   seed: Number(a.seed),
-  frames: Number(a.frames),
-  sheet: Number(a.sheet),
   desktop: a.desktop,
   variants: a.v ? a.v.split(',').filter(Boolean) : [null],
   modes,
@@ -65,8 +70,32 @@ const GPU_ENV =
   existsSync(ICD) && !process.env.VK_ICD_FILENAMES
     ? { ...process.env, VK_ICD_FILENAMES: ICD }
     : process.env;
+// Per-mode defaults; explicit flags always win. `variants` skips the expensive map warm-up.
+const MODE_DEFAULTS = {
+  hero: { n: 262144, frames: 300 },
+  variants: { query: 'mapn=32' },
+};
+const cfg = (mode) => ({
+  n: Number(a.n ?? MODE_DEFAULTS[mode]?.n ?? 65536),
+  frames: Number(a.frames ?? MODE_DEFAULTS[mode]?.frames ?? 180),
+  query: (a.query ?? MODE_DEFAULTS[mode]?.query ?? '').replace(/^[?&]+/, ''),
+});
+const sheetWidth = (dflt) => Number(a.sheet ?? dflt);
+const PHONE = {
+  viewport: { width: 393, height: 852 },
+  deviceScaleFactor: 1,
+  isMobile: true,
+  hasTouch: true,
+};
+const DESKTOP = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 };
+const HERO = {
+  viewport: { width: 430, height: 932 },
+  deviceScaleFactor: 2,
+  isMobile: true,
+  hasTouch: true,
+};
 const REGIMES = ['fixed', 'cycle', 'torus', 'strange', 'labyrinth'];
-const STEP_TIMEOUT = 240_000;
+const STEP_TIMEOUT = 600_000;
 const log = (...m) => console.error(...m);
 const f2 = (x) =>
   typeof x === 'number' && Number.isFinite(x) ? (Math.abs(x) < 0.005 ? 0 : x).toFixed(2) : '–';
@@ -169,32 +198,39 @@ const removeGpu = () => {
     Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
 };
 
-function pageUrl(base, v, gate) {
-  const q = [...(gate ? [] : ['skipintro', 'capture']), `n=${OPT.n}`, `seed=${OPT.seed}`];
+function pageUrl(base, v, { gate, n, query }) {
+  const q = [...(gate ? [] : ['skipintro', 'capture']), `n=${n}`, `seed=${OPT.seed}`];
   if (v) q.push(`v=${v}`);
+  if (query) q.push(query);
   return new URL(`?${q.join('&')}`, base).href;
 }
 
 // Runs fn(page, ctx) in a fresh, instrumented context (phone by default) and always closes it.
-async function withPage(browser, base, label, v, { gate = false, gpu = true, ready = true }, fn) {
-  const ctx = await browser.newContext(
-    OPT.desktop
-      ? { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }
-      : {
-          viewport: { width: 393, height: 852 },
-          deviceScaleFactor: 1,
-          isMobile: true,
-          hasTouch: true,
-        },
-  );
+// opts: {n, query} from cfg(), plus gate / gpu / ready / device.
+async function withPage(browser, base, label, v, opts, fn) {
+  const { gpu = true, ready = true, device = OPT.desktop ? DESKTOP : PHONE } = opts;
+  const ctx = await browser.newContext(device);
   try {
     if (!gpu) await ctx.addInitScript(removeGpu);
+    // Mock every WebSocket (never connected): vite's HMR client would otherwise reload the page
+    // whenever someone edits a source file mid-run, destroying the execution context.
+    await ctx.routeWebSocket(/.*/, () => {});
     const page = await ctx.newPage();
+    let loads = 0;
+    page.on('framenavigated', (f) => {
+      if (f === page.mainFrame() && ++loads > 1) warn(label, `page navigated again: ${f.url()}`);
+    });
     page.on('console', (m) => {
       if (m.type() === 'error' && !/favicon\.ico/.test(m.location().url ?? ''))
         report(label, 'console.error', m.text());
     });
-    page.on('pageerror', (e) => report(label, 'pageerror', e.message));
+    let abort;
+    const crashed = new Promise((_, no) => (abort = no));
+    crashed.catch(() => {}); // only consumed while waiting for `ready`
+    page.on('pageerror', (e) => {
+      report(label, 'pageerror', e.message);
+      abort(new Error(`page error: ${e.message}`));
+    });
     page.on('requestfailed', (r) => {
       const why = r.failure()?.errorText ?? 'failed';
       if (!why.includes('ERR_ABORTED')) report(label, 'requestfailed', `${r.url()} ${why}`);
@@ -203,12 +239,14 @@ async function withPage(browser, base, label, v, { gate = false, gpu = true, rea
       if (r.status() >= 400 && !r.url().endsWith('/favicon.ico'))
         report(label, `http ${r.status()}`, r.url());
     });
-    await page.goto(pageUrl(base, v, gate), { waitUntil: 'load' });
+    await page.goto(pageUrl(base, v, opts), { waitUntil: 'load' });
     if (ready) {
-      await page.waitForFunction(() => window.__axiom?.ready === true, null, {
-        timeout: 90_000,
+      const booted = page.waitForFunction(() => window.__axiom?.ready === true, null, {
+        timeout: 180_000,
         polling: 250,
       });
+      booted.catch(() => {}); // when a page error wins the race below, this one is abandoned
+      await Promise.race([booted, crashed]); // fail fast instead of waiting out the timeout
     }
     return await fn(page, ctx);
   } finally {
@@ -260,23 +298,33 @@ const esc = (s) =>
   String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 
 // cells: [{png: Buffer, label: string, flag?: bool}] laid out row-major in `cols` columns.
-async function contactSheet(tool, file, { title, cols, cells, footer = '' }) {
+// Optional `head` (column labels) and `side` (row labels) turn it into a labelled matrix.
+async function contactSheet(
+  tool,
+  file,
+  { title, cols, cells, footer = '', width = 1200, head, side },
+) {
   const gap = 10;
-  const cellW = Math.floor((OPT.sheet - 24 - (cols - 1) * gap) / cols);
-  const figs = cells
-    .map(
-      (c) =>
-        `<figure class="${c.flag ? 'flag' : ''}"><img src="data:image/png;base64,${c.png.toString('base64')}"><figcaption>${esc(c.label)}</figcaption></figure>`,
-    )
-    .join('');
+  const sideW = side ? 96 : 0;
+  const cellW = Math.floor((width - 24 - sideW - (cols - (side ? 0 : 1)) * gap) / cols);
+  const fig = (c) =>
+    `<figure class="${c.flag ? 'flag' : ''}"><img src="data:image/png;base64,${c.png.toString('base64')}"><figcaption>${esc(c.label)}</figcaption></figure>`;
+  const items = head
+    ? [...(side ? ['<div></div>'] : []), ...head.map((h) => `<div class="h">${esc(h)}</div>`)]
+    : [];
+  for (let r = 0; r * cols < cells.length; r++) {
+    if (side) items.push(`<div class="h">${esc(side[r])}</div>`);
+    items.push(...cells.slice(r * cols, (r + 1) * cols).map(fig));
+  }
   const html = `<!doctype html><meta charset="utf-8"><style>
     body{margin:0;padding:12px;background:#05060a;color:#9aa0b0;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace}
     h1{margin:0 0 10px;font:600 12px/1 system-ui,sans-serif;letter-spacing:.06em;color:#dfe3ee}
-    .g{display:grid;grid-template-columns:repeat(${cols},${cellW}px);gap:${gap}px}
+    .g{display:grid;grid-template-columns:${side ? `${sideW}px ` : ''}repeat(${cols},${cellW}px);gap:${gap}px}
     figure{margin:0}img{display:block;width:${cellW}px;height:auto;outline:1px solid #1b1e28}
     figcaption{padding:4px 0 0;white-space:pre}.flag figcaption{color:#ff6b5e}svg{display:block;margin-top:12px}
-  </style><h1>${esc(title)}</h1><div class="g">${figs}</div>${footer}`;
-  await tool.setViewportSize({ width: OPT.sheet, height: 200 });
+    .h{white-space:pre;color:#dfe3ee;padding-top:2px}
+  </style><h1>${esc(title)}</h1><div class="g">${items.join('')}</div>${footer}`;
+  await tool.setViewportSize({ width, height: 200 });
   await tool.setContent(html);
   await tool.evaluate(() => Promise.all([...document.images].map((i) => i.decode())));
   await tool.screenshot({ path: file, fullPage: true });
@@ -326,14 +374,15 @@ const CAMERAS = [
 
 async function grid(ctxs, v, pre) {
   const { browser, base, tool, out } = ctxs;
-  return withPage(browser, base, `grid${v ? `[${v}]` : ''}`, v, {}, async (page) => {
+  const C = cfg('grid');
+  return withPage(browser, base, `grid${v ? `[${v}]` : ''}`, v, C, async (page) => {
     const res = { sheets: [], shots: [] };
     for (const cam of CAMERAS) {
       if (cam.set) await hook(page, 'setCamera', cam.set);
       const cells = [];
       for (const p of DISK) {
         await hook(page, 'setBead', p.u, p.v);
-        await hook(page, 'step', OPT.frames);
+        await hook(page, 'step', C.frames);
         const s = await hook(page, 'stats');
         const file = join(out, `${pre}grid_${cam.name}_${p.name}.png`);
         cells.push({ ...p, s, file, png: await page.screenshot({ path: file }) });
@@ -351,7 +400,8 @@ async function grid(ctxs, v, pre) {
       });
       const sorted = [...cells].sort((p, q) => p.row - q.row || p.col - q.col);
       const sheet = await contactSheet(tool, join(out, `${pre}grid_${cam.name}.png`), {
-        title: `axiom grid · ${cam.name} · n=${OPT.n} seed=${OPT.seed} frames=${OPT.frames}${v ? ` · v=${v}` : ''}`,
+        width: sheetWidth(1200),
+        title: `axiom grid · ${cam.name} · n=${C.n} seed=${OPT.seed} frames=${C.frames}${v ? ` · v=${v}` : ''}`,
         cols: 3,
         cells: sorted.map((c) => ({
           png: c.png,
@@ -376,9 +426,10 @@ async function sweep(ctxs, v, pre) {
     PER_STEP = 30,
     U0 = -0.95,
     U1 = 0.95;
-  return withPage(browser, base, `sweep${v ? `[${v}]` : ''}`, v, {}, async (page) => {
+  const C = cfg('sweep');
+  return withPage(browser, base, `sweep${v ? `[${v}]` : ''}`, v, C, async (page) => {
     await hook(page, 'setBead', U0, 0);
-    await hook(page, 'step', OPT.frames); // settle so step 0 is comparable with step 1
+    await hook(page, 'step', C.frames); // settle so step 0 is comparable with step 1
     const frames = [];
     for (let i = 0; i < STEPS; i++) {
       const u = U0 + ((U1 - U0) * i) / (STEPS - 1);
@@ -405,6 +456,7 @@ async function sweep(ctxs, v, pre) {
     if (flagged.length)
       warn('sweep', `POTENTIAL DISCONTINUITY at step(s) ${flagged.join(', ')} (Δ > 3x median)`);
     const filmstrip = await contactSheet(tool, join(out, `${pre}sweep_filmstrip.png`), {
+      width: sheetWidth(1200),
       title: `axiom sweep · u ${U0} → ${U1}, v 0 · ${PER_STEP} frames/step · median Δ ${med.toFixed(2)} · red = Δ > 3x median${v ? ` · v=${v}` : ''}`,
       cols: 8,
       cells: frames.map((f, i) => ({
@@ -412,7 +464,7 @@ async function sweep(ctxs, v, pre) {
         flag: flagged.includes(i),
         label: `#${String(i).padStart(2, '0')} u ${f2(f.u)}\n${i ? `Δ ${diffs[i - 1].toFixed(2)}` : 'Δ –'} ${REGIMES[f.s.regime] ?? ''}`,
       })),
-      footer: diffChart(diffs, threshold, OPT.sheet - 24),
+      footer: diffChart(diffs, threshold, sheetWidth(1200) - 24),
     });
     return {
       filmstrip,
@@ -427,7 +479,7 @@ async function sweep(ctxs, v, pre) {
 async function sensors(ctxs, v, pre) {
   const { browser, base, out } = ctxs;
   const label = `sensors${v ? `[${v}]` : ''}`;
-  return withPage(browser, base, label, v, {}, async (page, ctx) => {
+  return withPage(browser, base, label, v, cfg('sensors'), async (page, ctx) => {
     const bead = async () => (await hook(page, 'stats')).bead;
     const shot = (name) => page.screenshot({ path: join(out, `${pre}sensors_${name}.png`) });
     // One deviceorientation event per frame, as a real device would deliver.
@@ -538,6 +590,7 @@ async function sensors(ctxs, v, pre) {
 async function gate(ctxs, v, pre) {
   const { browser, base, out } = ctxs;
   const label = `gate${v ? `[${v}]` : ''}`;
+  const C = cfg('gate');
   const settle = (page) => page.waitForTimeout(1500);
   const text = (page) => page.evaluate(() => document.body.innerText.trim());
   const start = await withPage(
@@ -545,7 +598,7 @@ async function gate(ctxs, v, pre) {
     base,
     label,
     v,
-    { gate: true, ready: false },
+    { ...C, gate: true, ready: false },
     async (page) => {
       await settle(page);
       const file = join(out, `${pre}gate_start.png`);
@@ -560,7 +613,7 @@ async function gate(ctxs, v, pre) {
     base,
     label,
     v,
-    { gate: true, gpu: false, ready: false },
+    { ...C, gate: true, gpu: false, ready: false },
     async (page) => {
       await settle(page);
       const file = join(out, `${pre}gate_nowebgpu.png`);
@@ -578,8 +631,138 @@ async function gate(ctxs, v, pre) {
   return { start, fallback };
 }
 
+// One place for the named spots on the disk used by `variants` and `hero`.
+const SPOTS = {
+  centre: { label: 'centre r=0', u: 0, v: 0 },
+  hopf: { label: 'Hopf / cycle', u: 0, v: 0.45 },
+  torus: { label: 'torus', u: -0.46, v: 0 },
+  lorenz: { label: 'Lorenz strange', u: 0.64, v: 0.64 },
+  rossler: { label: 'Rössler', u: -0.9, v: 0 },
+  thomas: { label: 'Thomas labyrinth', u: 0.64, v: -0.64 },
+  dive: { label: 'Lorenz, dive 0.7', u: 0.64, v: 0.64, dive: 0.7 },
+};
+const regimeLine = (s) => `${REGIMES[s.regime] ?? '–'}  D ${f2(s.dky)}`;
+const spotLabel = (k) => `${SPOTS[k].label}\n(${f2(SPOTS[k].u)}, ${f2(SPOTS[k].v)})`;
+
+// Renders each spot: teleport, settle, screenshot. `dive` spots go last (the camera stays dived).
+async function shootSpots(page, C, keys, fileFor) {
+  const shots = [];
+  for (const key of keys) {
+    const { u, v, dive } = SPOTS[key];
+    if (dive) await hook(page, 'setCamera', { dive });
+    await hook(page, 'setBead', u, v);
+    await hook(page, 'step', C.frames);
+    const s = await hook(page, 'stats');
+    const file = fileFor(key);
+    shots.push({ key, s, file, png: await page.screenshot({ path: file }) });
+    log(`  ${key} ${s.variant} regime=${s.regime} D=${f2(s.dky)} scale=${f2(s.scale)}`);
+  }
+  return shots;
+}
+
+// Rows = every --v id, columns = 7 spots; plus one row of start-gate shots.
+async function variants(ctxs) {
+  const { browser, base, tool, out } = ctxs;
+  const C = cfg('variants');
+  const keys = Object.keys(SPOTS);
+  const rows = [];
+  for (const id of OPT.variants) {
+    const label = `variants[${id}]`;
+    log(`  -- ${id}`);
+    const gate = await withPage(
+      browser,
+      base,
+      label,
+      id,
+      { ...C, gate: true, ready: false },
+      async (page) => {
+        await page.waitForSelector('nav.variants', { timeout: 30_000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+        const name = await page.evaluate(
+          () => document.querySelector('nav.variants .on')?.textContent ?? null,
+        );
+        return { name, png: await page.screenshot({ path: join(out, `variants_${id}_gate.png`) }) };
+      },
+    );
+    const shots = await withPage(browser, base, label, id, C, (page) =>
+      shootSpots(page, C, keys, (k) => join(out, `variants_${id}_${k}.png`)),
+    );
+    check(
+      label,
+      'engine loaded the requested variant',
+      shots.every((x) => x.s.variant === id),
+      shots[0].s.variant,
+    );
+    const an = await analyze(
+      tool,
+      shots.map((x) => x.png),
+    );
+    an.forEach((x, i) => warnIfBlank(label, `${id} ${keys[i]}`, x));
+    rows.push({ id, gate, shots });
+  }
+  const width = sheetWidth(1800);
+  const suffix = `n=${C.n} frames=${C.frames} seed=${OPT.seed}${C.query ? ` ${C.query}` : ''}`;
+  const matrix = await contactSheet(tool, join(out, 'variants_matrix.png'), {
+    title: `axiom variants · ${suffix}`,
+    cols: keys.length,
+    width,
+    head: keys.map(spotLabel),
+    side: rows.map((r) =>
+      r.gate.name && r.gate.name !== r.id ? `${r.gate.name}\n(${r.id})` : r.id,
+    ),
+    cells: rows.flatMap((r) => r.shots.map((x) => ({ png: x.png, label: regimeLine(x.s) }))),
+  });
+  const gates = await contactSheet(tool, join(out, 'variants_gates.png'), {
+    title: `axiom start gates · ${suffix}`,
+    cols: rows.length,
+    width: Math.min(width, 24 + rows.length * 370), // keep a lone gate from blowing up to full width
+    cells: rows.map((r) => ({ png: r.gate.png, label: r.gate.name ?? r.id })),
+  });
+  return {
+    matrix,
+    gates,
+    rows: rows.map(
+      (r) => `${r.id}: ${r.shots.map((x) => `${x.key} ${regimeLine(x.s)}`).join(' | ')}`,
+    ),
+  };
+}
+
+// Presentation stills: 3 spots at 430x932 @2x, full-resolution PNGs + a triptych per variant.
+async function hero(ctxs, v, pre) {
+  const { browser, base, tool, out } = ctxs;
+  const C = cfg('hero');
+  const label = `hero${v ? `[${v}]` : ''}`;
+  const keys = ['hopf', 'lorenz', 'thomas'];
+  const shots = await withPage(browser, base, label, v, { ...C, device: HERO }, (page) =>
+    shootSpots(page, C, keys, (k) => join(out, `${pre}hero_${k}.png`)),
+  );
+  if (v)
+    check(
+      label,
+      'engine loaded the requested variant',
+      shots.every((x) => x.s.variant === v),
+      shots[0].s.variant,
+    );
+  shots.forEach(
+    (x) => x.s.scale < 1 && warn(label, `${x.key} rendered at resolution scale ${f2(x.s.scale)}`),
+  );
+  const an = await analyze(
+    tool,
+    shots.map((x) => x.png),
+  );
+  an.forEach((x, i) => warnIfBlank(label, keys[i], x));
+  const triptych = await contactSheet(tool, join(out, `${pre}hero_triptych.png`), {
+    title: `axiom hero · ${shots[0].s.variant} · n=${C.n} frames=${C.frames} seed=${OPT.seed}`,
+    cols: 3,
+    width: sheetWidth(1800),
+    cells: shots.map((x) => ({ png: x.png, label: `${SPOTS[x.key].label}  ${regimeLine(x.s)}` })),
+  });
+  return { triptych, stills: shots.map((x) => x.file), pixels: '860x1864' };
+}
+
 // ---- main ------------------------------------------------------------------------------------
-const MODES = { grid, sweep, sensors, gate };
+const MODES = { grid, sweep, sensors, gate, variants, hero };
+const ONCE = new Set(['variants']); // modes that consume every --v id in a single run
 let server, browser;
 const cleanup = async () => {
   await browser?.close().catch(() => {});
@@ -607,10 +790,11 @@ try {
   });
   const tool = await (await browser.newContext()).newPage(); // scratch page for image decoding + sheets
   const ctxs = { browser, base: server.base, tool, out: OPT.out };
-  for (const v of OPT.variants) {
-    for (const mode of OPT.modes) {
+  for (const mode of OPT.modes) {
+    for (const v of ONCE.has(mode) ? [null] : OPT.variants) {
       const key = v ? `${mode}:${v}` : mode;
-      log(`\n== ${key}`);
+      const { n, frames, query } = cfg(mode);
+      log(`\n== ${key}  n=${n} frames=${frames}${query ? ` query=${query}` : ''}`);
       try {
         results[key] = await MODES[mode](ctxs, v, v ? `${v}_` : '');
       } catch (e) {
@@ -635,7 +819,11 @@ const summary = {
   ok,
   out: OPT.out,
   device: OPT.desktop ? 'desktop 1440x900' : 'phone 393x852',
-  params: { n: OPT.n, seed: OPT.seed, frames: OPT.frames, variants: OPT.variants.filter(Boolean) },
+  params: {
+    seed: OPT.seed,
+    variants: OPT.variants.filter(Boolean),
+    config: Object.fromEntries(OPT.modes.map((m) => [m, cfg(m)])),
+  },
   modes: results,
   warnings,
   checks: checks.map(

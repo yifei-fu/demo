@@ -1,5 +1,6 @@
 /** The particle cloud: one fused compute pass integrates, respawns and splats every frame. */
 import { createShader, createUniform, type Gpu } from './gpu';
+import { ExtentProbe } from './extent';
 import { LAW_LEN } from './law';
 import type { CameraState } from './navigator';
 import lawWgsl from './shaders/law.wgsl?raw';
@@ -17,6 +18,8 @@ const MAX_COC = 0.045; // fraction of height
 const NEAR = 0.03;
 const MAX_SUBSTEP_DT = 0.03; // world time; keeps RK2 accurate on a fast law at low fps
 const MAX_SUBSTEPS = 4;
+/** About this many particles feed the extent measurement each frame. */
+const EXTENT_SAMPLES = 12288;
 const TAN_HALF = 0.31;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
@@ -41,8 +44,16 @@ export interface FrameParams {
   splat: boolean;
 }
 
+const vec4 = (f: Float32Array, o: number, x: number, y: number, z: number, w: number): void => {
+  f[o] = x;
+  f[o + 1] = y;
+  f[o + 2] = z;
+  f[o + 3] = w;
+};
+
 export class Particles {
   readonly capacity: number;
+  readonly extent: ExtentProbe;
   private count: number;
   private readonly device: GPUDevice;
   private readonly pipeline: GPUComputePipeline;
@@ -72,6 +83,7 @@ export class Particles {
       size: count * PARTICLE_BYTES,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
+    this.extent = new ExtentProbe(device);
     this.lawBuf = createUniform(device, LAW_LEN * 4 + 16, 'law');
     this.frameBuf = createUniform(device, FRAME_FLOATS * 4, 'frame');
     const module = createShader(
@@ -95,6 +107,7 @@ export class Particles {
         { binding: 1, resource: { buffer: this.frameBuf } },
         { binding: 2, resource: { buffer: this.particles } },
         { binding: 3, resource: { buffer: accum } },
+        { binding: 4, resource: { buffer: this.extent.buffer } },
       ],
     });
   }
@@ -134,43 +147,43 @@ export class Particles {
     const fx = focalPx / (width * 0.5);
     const fy = focalPx / (height * 0.5);
     const f = this.f32;
-    f.set([...cam.right, fx], 0);
-    f.set([...cam.up, fy], 4);
-    f.set([...cam.fwd, 0], 8);
-    f.set([...cam.eye, 0], 12);
+    // (no temporary arrays: this runs every frame and the GC pauses show on phones)
+    vec4(f, 0, cam.right[0], cam.right[1], cam.right[2], fx);
+    vec4(f, 4, cam.up[0], cam.up[1], cam.up[2], fy);
+    vec4(f, 8, cam.fwd[0], cam.fwd[1], cam.fwd[2], 0);
+    vec4(f, 12, cam.eye[0], cam.eye[1], cam.eye[2], 0);
 
     // stir ray through the touch point
     const s = p.stir;
     const rx = s.x / fx;
     const ry = s.y / fy;
-    const dir = [
-      cam.fwd[0] + cam.right[0] * rx + cam.up[0] * ry,
-      cam.fwd[1] + cam.right[1] * rx + cam.up[1] * ry,
-      cam.fwd[2] + cam.right[2] * rx + cam.up[2] * ry,
-    ];
-    const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
-    f.set([dir[0] / dl, dir[1] / dl, dir[2] / dl, STIR_RADIUS / fy], 16);
+    const dx = cam.fwd[0] + cam.right[0] * rx + cam.up[0] * ry;
+    const dy = cam.fwd[1] + cam.right[1] * rx + cam.up[1] * ry;
+    const dz = cam.fwd[2] + cam.right[2] * rx + cam.up[2] * ry;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    vec4(f, 16, dx / dl, dy / dl, dz / dl, STIR_RADIUS / fy);
 
     this.shakeEnergy *= Math.exp(-SHAKE_DECAY * p.dt);
     if (this.shakeEnergy < 0.004) this.shakeEnergy = 0;
 
-    f.set([width, height, p.dt, p.time], 20);
-    f.set([cam.focus, this.aperture * height, NEAR, MAX_COC * height], 24);
-    f.set([s.x, s.y, s.active ? s.strength : 0, 0], 28);
-    f.set([s.vx, s.vy, this.shakeEnergy, this.shakeId], 32);
-    f.set(
-      [
-        this.seedFraction,
-        Math.min(MAX_SUBSTEPS, Math.max(2, Math.ceil(p.dt / MAX_SUBSTEP_DT))),
-        0,
-        0,
-      ],
+    vec4(f, 20, width, height, p.dt, p.time);
+    vec4(f, 24, cam.focus, this.aperture * height, NEAR, MAX_COC * height);
+    vec4(f, 28, s.x, s.y, s.active ? s.strength : 0, 0);
+    vec4(f, 32, s.vx, s.vy, this.shakeEnergy, this.shakeId);
+    const substeps = Math.min(MAX_SUBSTEPS, Math.max(2, Math.ceil(p.dt / MAX_SUBSTEP_DT)));
+    vec4(
+      f,
       36,
+      this.seedFraction,
+      substeps,
+      Math.max(1, Math.floor(this.count / EXTENT_SAMPLES)),
+      0,
     );
-    this.u32.set(
-      [p.frame >>> 0, this.count, this.seed, extraFlags | (p.splat ? FLAG_SPLAT : 0)],
-      40,
-    );
+    const u = this.u32;
+    u[40] = p.frame >>> 0;
+    u[41] = this.count;
+    u[42] = this.seed;
+    u[43] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);

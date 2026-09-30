@@ -180,16 +180,27 @@ fn lyap(@builtin(global_invocation_id) gid: vec3u) {
   c.q1 = vec4f(s.b, g.y);
   c.q2 = vec4f(s.c, g.z);
   cells[idx] = c;
-  // r dimension, g regime, b the whole-number world it rounds to (for contours), a progress
+  // r dimension; g is 1 on a torus and b on a strange attractor or labyrinth (indicators, so the
+  // lens can interpolate them); a is progress
   let done = select(min(1.0, t / P.t_total), 1.0, c.info.x > 0.5);
-  textureStore(field_out, gid.xy, vec4f(d, reg, clamp(floor(d + 0.5), 0.0, 3.0), done));
+  textureStore(field_out, gid.xy, vec4f(d, select(0.0, 1.0, reg == 2.0), select(0.0, 1.0, reg >= 3.0), done));
 }
 
 // ---------------------------------------------------------------------------------- lens
+// A small dark glass object. The regimes are drawn as light: a soft glow where a cycle lives, a
+// moire of fine rings on a torus, a twinkling grain where the motion is chaotic, and hairline
+// contours where the whole-number dimension changes. Hue is only an accent. In the light theme
+// the same picture is ink on paper.
+
+// The canvas reaches EXTENT disk radii from the centre, leaving room for the rim furniture.
+const EXTENT: f32 = 1.1;
+const TAU: f32 = 6.2831853;
 
 struct LensParams {
-  accent: vec4f,  // rgb tint, a = open (0 closed, 1 open)
-  view: vec4f,    // grid side, canvas pixels across the disk, device pixel ratio
+  accent: vec4f,             // rgb accent, a = open (0 the lens, 1 the full-screen map)
+  view: vec4f,               // grid side, canvas pixels across, device pixel ratio, disk radius in CSS px
+  mode: vec4f,               // x = 1 for the light theme, y = time in seconds
+  anchors: array<vec4f, 2>,  // angles of the law's anchors on the rim; 9 = none
 }
 
 @group(0) @binding(0) var<uniform> V: LensParams;
@@ -203,7 +214,7 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
   let q = vec2f(f32((i << 1u) & 2u), f32(i & 2u));  // a fullscreen triangle
   var o: VOut;
   o.pos = vec4f(q * 2.0 - 1.0, 0.0, 1.0);
-  o.p = q * 2.0 - 1.0;  // disk coordinates, v up
+  o.p = (q * 2.0 - 1.0) * EXTENT;  // disk coordinates, v up
   return o;
 }
 
@@ -231,46 +242,49 @@ fn smooth_field(uv: vec2f) -> vec4f {
   return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
 }
 
-// D 0 ink with a hint of depth, 1 cool, 2 warm, 2 to 3 a thin-film shimmer, 3 pale light. The
-// hues are the origin variant's own: indigo and azure, champagne, coral and rose, aqua.
-fn palette(d: f32, accent: vec3f) -> vec3f {
-  let ink = vec3f(0.010, 0.013, 0.030) + accent * 0.012;
-  let cool = mix(vec3f(0.10, 0.32, 0.92), accent, 0.2);
-  let warm = vec3f(0.98, 0.78, 0.46);
-  let coral = vec3f(1.0, 0.44, 0.44);
-  let rose = vec3f(0.92, 0.30, 0.70);
-  let aqua = vec3f(0.42, 0.90, 0.92);
-  let pale = mix(vec3f(0.96, 0.97, 1.0), accent, 0.10);
-  let s = clamp(d, 0.0, 3.0);
-  var c = mix(ink, cool, smoothstep(0.0, 1.0, s));
-  c = mix(c, warm, smoothstep(1.0, 2.0, s));
-  c = mix(c, coral, smoothstep(2.0, 2.22, s));
-  c = mix(c, rose, smoothstep(2.22, 2.5, s));
-  c = mix(c, aqua, smoothstep(2.5, 2.76, s));
-  c = mix(c, pale, smoothstep(2.76, 3.0, s));
-  return c;
-}
-
 // How much the whole-number world changes within a few cells of here: 0 deep in a plateau,
 // rising towards a contour. A spiral of bilinear taps, turned per pixel so what is left of the
 // sampling error is fine grain rather than terraces.
-fn nearness(uv: vec2f, b0: f32, turn: f32) -> f32 {
-  let reach = 6.5 / V.view.x;
+fn nearness(uv: vec2f, world: f32, turn: f32) -> f32 {
+  let reach = 6.0 / V.view.x;
   var acc = 0.0;
-  for (var i = 0; i < 20; i++) {
-    let a = f32(i) * 2.39996 + turn * 6.2832;
-    let rad = reach * sqrt((f32(i) + 0.5) / 20.0);
-    acc += abs(textureSampleLevel(field, samp, uv + vec2f(cos(a), sin(a)) * rad, 0.0).z - b0);
+  for (var i = 0; i < 14; i++) {
+    let a = f32(i) * 2.39996 + turn * TAU;
+    let rad = reach * sqrt((f32(i) + 0.5) / 14.0);
+    let d = textureSampleLevel(field, samp, uv + vec2f(cos(a), sin(a)) * rad, 0.0).x;
+    acc += abs(floor(d + 0.5) - world);
   }
-  return smoothstep(0.0, 1.0, clamp(acc / 20.0 * 2.6, 0.0, 1.0));
+  return smoothstep(0.0, 1.0, clamp(acc / 14.0 * 2.4, 0.0, 1.0));
 }
 
-fn white(p: vec2u) -> f32 {
-  return f32(hash(p.x + 4099u * p.y)) / 4294967295.0;
+fn white(p: vec2u, salt: u32) -> f32 {
+  return f32(hash(p.x + 4099u * p.y + salt * 15731u)) / 4294967295.0;
 }
 
-fn dither(p: vec2f) -> f32 {
-  return fract(52.9829189 * fract(dot(p, vec2f(0.06711056, 0.00583715)))) - 0.5;
+fn lum(c: vec3f) -> f32 {
+  return dot(c, vec3f(0.299, 0.587, 0.114));
+}
+
+// The rim furniture of the open map: a hairline, a tick every 5 degrees (longer every 30) and a
+// small diamond at each anchor of the law. Coverage 0..1.
+fn bezel(p: vec2f, r: f32, px: f32) -> f32 {
+  var c = 0.5 * (1.0 - smoothstep(0.5 * px, 1.5 * px, abs(r - 1.032)));
+  let t = atan2(p.y, p.x) / TAU * 72.0;
+  let idx = round(t);
+  let across = abs(t - idx) * TAU * r / 72.0;
+  let major = idx - 6.0 * floor(idx / 6.0) < 0.5;
+  let reach = select(1.056, 1.082, major);
+  let tick = (1.0 - smoothstep(0.4 * px, 1.3 * px, across)) * step(1.032, r) * (1.0 - smoothstep(reach - px, reach, r));
+  c = max(c, tick * select(0.4, 0.75, major));
+  for (var i = 0; i < 8; i++) {
+    let a = V.anchors[i >> 2u][i & 3];
+    if (a > 8.0) { continue; }
+    let dir = vec2f(cos(a), sin(a));
+    let q = p - dir * 1.066;
+    let dd = abs(dot(q, dir)) + abs(dot(q, vec2f(-dir.y, dir.x)));
+    c = max(c, 1.0 - smoothstep(0.02 - px, 0.02 + px, dd));
+  }
+  return c;
 }
 
 @fragment
@@ -278,40 +292,101 @@ fn fs(in: VOut) -> @location(0) vec4f {
   let open = V.accent.a;
   let acc = V.accent.rgb;
   let dpr = V.view.z;
-  let r = length(in.p);
+  let light = V.mode.x > 0.5;
+  let time = V.mode.y;
+  let p = in.p;
+  let r = length(p);
   let px = max(fwidth(r), 1e-4);          // one canvas pixel, in disk units
   let disk = 1.0 - smoothstep(1.0 - px, 1.0 + px, r);
 
-  let uv = vec2f(in.p.x * 0.5 + 0.5, 0.5 - in.p.y * 0.5);
+  let uv = vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
   let f = smooth_field(uv);
-  let near = nearness(uv, f.z, white(vec2u(in.pos.xy)));
-  let ready = smoothstep(0.02, 0.4, f.w);
-  var col = palette(f.x, acc);
+  let d = f.x;
+  let tor = clamp(f.y, 0.0, 1.0);
+  let cha = clamp(f.z, 0.0, 1.0);
+  let ready = mix(0.4, 1.0, smoothstep(0.02, 0.4, f.w));
+  let world = floor(d + 0.5);
+  let near = nearness(uv, world, white(vec2u(in.pos.xy), 0u));
+  let live = smoothstep(0.3, 0.85, d);
+  let cyc = live * (1.0 - smoothstep(1.25, 1.75, d));
 
-  // light gathers at the contours and the plateaus lie deeper, like an engraved chart
-  col *= 0.86 + 0.45 * near;
+  let ice = mix(vec3f(0.52, 0.72, 1.0), acc, 0.3);
+  let gold = vec3f(1.0, 0.82, 0.52);
+  let pearl = vec3f(0.97, 0.96, 0.93);
 
-  // a faint bevel where the dimension changes fast: light from the upper left
-  let slope = vec2f(dpdx(f.x), dpdy(f.x)) * (V.view.y * 0.5) / V.view.x;
-  col *= 1.0 + clamp(0.7 * (slope.x + slope.y), -0.5, 0.5) * 0.5;
-
-  // crisp contours where the whole-number world changes: D = 1, 2 and 3 are the worlds entered
-  let gb = length(vec2f(dpdx(f.z), dpdy(f.z)));
-  let hw = mix(0.42, 0.55, open) * dpr;
-  var line = 0.0;
+  // hairline contours where the nearest whole-number world changes, and finer ones each tenth of
+  // a dimension inside the chaotic band
+  let gd = length(vec2f(dpdx(d), dpdy(d)));
+  let hw = mix(0.34, 0.42, open) * dpr;
+  var major = 0.0;
   for (var k = 1; k <= 3; k++) {
-    let d = abs(f.z - (f32(k) - 0.5)) / max(gb, 1e-4);   // distance to the level, in pixels
-    line = max(line, select(0.8, 1.0, k == 1) * (1.0 - smoothstep(hw - 0.6, hw + 0.6, d)));
+    let dist = abs(d - (f32(k) - 0.5)) / max(gd, 1e-4);
+    major = max(major, select(0.8, 1.0, k == 1) * (1.0 - smoothstep(hw - 0.6, hw + 0.6, dist)));
   }
-  let ink = mix(vec3f(0.90, 0.94, 1.0), acc, 0.3);
-  col = mix(col, ink, line * 0.7 * ready);
+  let tenth = abs(fract(d * 10.0 + 0.5) - 0.5) / max(gd * 10.0, 1e-4);
+  let minor = (1.0 - smoothstep(0.7 * hw - 0.5, 0.7 * hw + 0.5, tenth))
+    * cha * smoothstep(2.03, 2.2, d) * smoothstep(0.0006, 0.004, gd);
 
-  // the lens itself: a dimmer rim, a hint of glass, and the r = 1 ring
-  col *= 1.0 - 0.22 * smoothstep(0.6, 1.0, r);
-  col += vec3f(0.55, 0.62, 0.85) * 0.045 * smoothstep(0.8, 0.0, length(in.p - vec2f(-0.34, 0.42)));
-  let ring = exp(-pow((r - (1.0 - 1.5 * px)) / (1.4 * px), 2.0));
-  col = mix(col, acc, ring * mix(0.16, 0.24, open));
-  col *= mix(0.55, 1.0, ready) * mix(0.9, 1.0, open);
-  col += dither(in.pos.xy) / 255.0;
-  return vec4f(col * disk, disk);
+  // a torus: fine rings seen through a second, off-centre set of rings
+  let ringsPerRadius = clamp(V.view.w / 2.6, 8.0, 60.0);
+  let kr = TAU * ringsPerRadius;
+  let shift = vec2f(0.9, 0.4) * (9.4 / kr);
+  let moire = 0.5 + 0.5 * cos(kr * length(p)) * cos(kr * length(p - shift));
+  let ringFade = smoothstep(2.2, 3.6, (TAU / kr) / px);
+
+  // chaos: a shimmer of tiny points that swell and fade out of step with one another, denser
+  // as the dimension nears 3, with a faint thin-film tint
+  let cellPx = max(1.9 * dpr, 2.6);
+  let g = in.pos.xy / cellPx;
+  let cell = vec2u(floor(g));
+  let n1 = white(cell, 0u);
+  let n2 = white(cell, 977u);
+  let n3 = white(cell, 31u);
+  let at = vec2f(white(cell, 101u), white(cell, 202u)) * 0.5 + 0.25;
+  let dot2 = 1.0 - smoothstep(0.25 * dpr, 0.7 * dpr, length(fract(g) - at) * cellPx);
+  let density = cha * (0.08 + 0.42 * clamp(d - 2.0, 0.0, 1.0));
+  let member = smoothstep(1.0 - density, 1.0 - density + 0.03, n1);
+  let breath = pow(0.5 + 0.5 * sin(time * (1.4 + 2.2 * n2) + n3 * TAU), 2.0);
+  let spark = member * (0.12 + 0.88 * breath) * dot2;
+  let swell = 0.5 + 0.5 * sin(p.x * 7.0 + time * 0.8 + 3.0 * sin(p.y * 5.0 - time * 0.5));
+  let film = 0.5 + 0.5 * cos(TAU * (vec3f(0.0, 0.33, 0.67) + d * 1.4 + n2 * 0.25));
+  let chaosTint = mix(mix(gold, pearl, clamp(d - 2.0, 0.0, 1.0)), film, 0.18);
+
+  // light
+  var e = vec3f(0.0);
+  e += ice * cyc * (0.035 + 0.2 * near);
+  e += gold * tor * (0.05 + 0.13 * near + 0.16 * moire * ringFade);
+  e += chaosTint * cha * (0.10 + 0.10 * clamp(d - 2.0, 0.0, 1.0) + 0.07 * swell * (0.3 + near) + 1.3 * spark);
+  e += pearl * (0.62 * major + 0.26 * minor);
+  e *= ready;
+
+  // the glass: a faint fresnel at the rim, a reflection arc in the upper left, a hint of depth
+  let ang = atan2(p.y, p.x);
+  let arc = smoothstep(0.045, 0.0, abs(r - 0.88)) * smoothstep(0.0, 0.35, sin(ang - 1.9)) * smoothstep(1.0, 0.3, abs(ang - 2.3));
+  let fresnel = smoothstep(0.9, 1.0, r);
+  let ring = exp(-pow((r - (1.0 - 1.4 * px)) / (1.3 * px), 2.0));
+
+  var col: vec3f;
+  if (light) {
+    let paper = vec3f(0.955, 0.935, 0.885) * (1.0 + (white(vec2u(in.pos.xy), 5u) - 0.5) * 0.025);
+    let ink = mix(vec3f(0.07, 0.09, 0.16), acc * 0.4, 0.3);
+    let amount = clamp(lum(e) * 1.5 + 0.6 * major, 0.0, 1.0);
+    let hue = mix(vec3f(1.0), e / max(lum(e), 1e-3), 0.25);
+    col = mix(paper, ink * hue, pow(amount, 0.85));
+    col *= 1.0 - 0.10 * fresnel - 0.05 * smoothstep(0.5, 1.0, r);
+    col = mix(col, ink, ring * mix(0.35, 0.5, open));
+  } else {
+    let depth = vec3f(0.006, 0.008, 0.017) + vec3f(0.010, 0.014, 0.030) * (1.0 - r * r) + acc * 0.006;
+    col = depth + e;
+    col += vec3f(0.55, 0.62, 0.85) * (0.05 * arc + 0.03 * fresnel);
+    col = mix(col, acc, ring * mix(0.20, 0.32, open));
+  }
+  col *= mix(0.85, 1.0, open);
+  col += (white(vec2u(in.pos.xy), 9u) - 0.5) / 255.0;
+
+  // rim furniture, outside the disk, open only
+  let bz = bezel(p, r, px) * open * (1.0 - disk);
+  let bzCol = select(mix(pearl, acc, 0.35), mix(vec3f(0.07, 0.09, 0.16), acc * 0.4, 0.3), light);
+  let alpha = max(disk, bz);
+  return vec4f(col * disk + bzCol * bz, alpha);
 }

@@ -64,7 +64,11 @@ export function bindHooks(
   hooks.stir = (x, y, strength) => engine.stir(x, y, strength);
   hooks.step = async (frames = 1, dt = 1 / 60) => {
     const n = Math.max(1, Math.floor(frames));
-    for (let i = 0; i < n; i++) engine.advance(dt, i >= n - RENDERED_TAIL);
+    for (let i = 0; i < n; i++) {
+      engine.advance(dt, i >= n - RENDERED_TAIL);
+      // deterministic captures: the camera must not depend on when a readback happens to land
+      await engine.extentLanded();
+    }
     await engine.settled();
     afterStep();
   };

@@ -49,7 +49,9 @@ async function boot(): Promise<void> {
   const mapHost = document.createElement('div');
   mapHost.className = 'map-host';
   ui.append(mapHost);
-  engine.attachMap(createParamMap(gpu, core, flags.seed, mapHost, variant.hud.accent));
+  engine.attachMap(
+    createParamMap(gpu, core, flags.seed, mapHost, variant.hud.accent, variant.hud.theme),
+  );
 
   const hud = new Hud(
     ui,
@@ -78,6 +80,8 @@ async function boot(): Promise<void> {
     },
   );
   void gpu.lost.then((reason) => hud.showLost(reason));
+
+  await engine.warmUp();
 
   if (flags.skipintro) {
     engine.sensors.arm();

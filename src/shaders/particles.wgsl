@@ -12,7 +12,7 @@ struct Frame {
   lens: vec4f,    // focus distance, aperture (px), near plane, max CoC (px)
   stir: vec4f,    // touch ndc x, y, strength, unused
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
-  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, unused...
+  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -20,19 +20,27 @@ struct Frame {
 @group(0) @binding(1) var<uniform> F: Frame;
 @group(0) @binding(2) var<storage, read_write> parts: array<vec4f>;
 @group(0) @binding(3) var<storage, read_write> accum: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> extent: array<atomic<u32>>;
 
 const FIXED: f32 = 256.0;
 const TAU: f32 = 6.2831853;
 const SPAWN_RADIUS: f32 = 1.2;
 const ESCAPE_R2: f32 = 2.56;             // respawn beyond |x| = 1.6
 const TRICKLE_PER_SECOND: f32 = 0.12;   // 0.2 % per frame at 60 fps
-const TRACER_FRACTION: f32 = 0.004;  // a few particles burn much brighter and draw visible streams
-const DUST_WEIGHT: f32 = 0.08;       // newcomers are faint
-const TRACER_WEIGHT: f32 = 30.0;     // ... except a few tracers that draw the streams
+// Newcomers are still falling toward the attractor. They are dim and wear one calm hue until they
+// have settled onto it, and a few of them (tracers) trail hair-thin comet tails, so the respawn
+// trickle reads as fine streams flowing inward rather than as dust.
+const DUST_WEIGHT: f32 = 0.08;
 const SETTLED_START: f32 = 1.5;      // age (s) at which a newcomer starts to become full light
 const SETTLED_END: f32 = 6.0;
-const OLD_TRACER_WEIGHT: f32 = 6.0;  // settled tracers keep a modest sparkle
 const REFERENCE_SPEED: f32 = 0.45;   // the hue newcomers wear, whatever their speed
+const TRACER_FRACTION: f32 = 0.0016;
+const TRACER_WEIGHT: f32 = 5.0;
+const TAIL_STEPS: i32 = 14;
+const TAIL_DT: f32 = 0.04;           // world time between tail samples (a 0.55 s tail)
+// The attractor's extent is measured on a sample of settled particles, in fixed point.
+const POS_FIXED: f32 = 16384.0;
+const SQ_FIXED: f32 = 4096.0;
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
 
 fn pcg(v: u32) -> u32 {
@@ -69,6 +77,30 @@ fn stir_velocity(p: vec3f) -> vec3f {
   let swirl = cross(F.ray.xyz, o) / sig;
   let drag = (F.right.xyz * (F.stirv.x / F.right.w) + F.up.xyz * (F.stirv.y / F.up.w)) * t;
   return strength * g * (2.2 * swirl + 0.7 * clamp(drag, vec3f(-3.0), vec3f(3.0)));
+}
+
+// Project a world point and add it to the accumulation buffer at a random spot inside its circle
+// of confusion (stochastic depth of field). `col` is linear colour, `wgt` its particle weight.
+fn splat(pos: vec3f, col: vec3f, wgt: f32, hj: u32) {
+  let d = pos - F.eye.xyz;
+  let cz = dot(d, F.fwd.xyz);
+  if (cz < F.lens.z) { return; }
+  let cx = dot(d, F.right.xyz);
+  let cy = dot(d, F.up.xyz);
+  let ndc = vec2f(cx / cz * F.right.w, cy / cz * F.up.w);
+  if (abs(ndc.x) > 2.0 || abs(ndc.y) > 2.0) { return; }
+  let res = F.screen.xy;
+  var px = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * res;
+  let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + MIN_COC_PER_850PX * max(0.75, res.y / 850.0);
+  let ang = TAU * u01(hj);
+  px += coc * sqrt(u01(pcg(hj))) * vec2f(cos(ang), sin(ang));
+  if (px.x < 0.0 || px.y < 0.0 || px.x >= res.x || px.y >= res.y) { return; }
+  let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
+  let c = max(col, vec3f(0.0)) * (wgt * FIXED);
+  atomicAdd(&accum[base], u32(c.r));
+  atomicAdd(&accum[base + 1u], u32(c.g));
+  atomicAdd(&accum[base + 2u], u32(c.b));
+  atomicAdd(&accum[base + 3u], u32(wgt * FIXED));
 }
 
 @compute @workgroup_size(64)
@@ -122,40 +154,39 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   }
   parts[i] = vec4f(p, born);
 
+  // extent: a sparse sample of settled particles, summed for the host (centre and RMS radius)
+  let stride = u32(F.misc.z);
+  if (!init && age > SETTLED_END && i % stride == 0u) {
+    let f = vec3i(round(p * POS_FIXED));
+    atomicAdd(&extent[0], 1u);
+    atomicAdd(&extent[1], bitcast<u32>(f.x));
+    atomicAdd(&extent[2], bitcast<u32>(f.y));
+    atomicAdd(&extent[3], bitcast<u32>(f.z));
+    atomicAdd(&extent[4], u32(dot(p, p) * SQ_FIXED));
+  }
+
   if ((F.ids.w & 2u) == 0u) { return; }
 
-  // draw at a random moment inside the frame: free motion blur that turns fast dust into streaks
+  // draw at a random moment inside the frame: free motion blur
   let hj = hash3(i, frame, seed ^ 0x9e3779b9u);
   let q_draw = mix(p_before, p, u01(pcg(hj ^ 0x85ebca6bu)));
+  let cz = dot(q_draw - F.eye.xyz, F.fwd.xyz);
+  let depth = cz - F.lens.x;
 
-  // project
-  let d = q_draw - F.eye.xyz;
-  let cz = dot(d, F.fwd.xyz);
-  if (cz < F.lens.z) { return; }
-  let cx = dot(d, F.right.xyz);
-  let cy = dot(d, F.up.xyz);
-  let ndc = vec2f(cx / cz * F.right.w, cy / cz * F.up.w);
-  if (abs(ndc.x) > 2.0 || abs(ndc.y) > 2.0) { return; }
-  let res = F.screen.xy;
-  var px = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * res;
-
-  // stochastic depth of field: land at a random point inside the circle of confusion
-  let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + MIN_COC_PER_850PX * max(0.75, res.y / 850.0);
-  let ang = TAU * u01(hj);
-  px += coc * sqrt(u01(pcg(hj))) * vec2f(cos(ang), sin(ang));
-  if (px.x < 0.0 || px.y < 0.0 || px.x >= res.x || px.y >= res.y) { return; }
-
-  let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
-  // Newcomers are still falling toward the attractor. They are what makes the cloud read as
-  // streams rather than a fog, so they are dim and share one calm hue; once a particle has
-  // settled onto the attractor it takes the variant's full light.
   let settled = smoothstep(SETTLED_START, SETTLED_END, age);
-  let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION;
-  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), select(1.0, OLD_TRACER_WEIGHT, tracer), settled);
   let calm = mix(REFERENCE_SPEED, speed, settled);
-  let col = max(shade(calm, phase, cz - F.lens.x, F.misc.x), vec3f(0.0)) * (wgt * FIXED);
-  atomicAdd(&accum[base], u32(col.r));
-  atomicAdd(&accum[base + 1u], u32(col.g));
-  atomicAdd(&accum[base + 2u], u32(col.b));
-  atomicAdd(&accum[base + 3u], u32(wgt * FIXED));
+  let col = shade(calm, phase, depth, F.misc.x);
+  let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION && settled < 1.0;
+  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), 1.0, settled);
+  splat(q_draw, col, wgt, hj);
+
+  if (tracer) {
+    // a comet tail: the recent path, walked backward along the flow, fading with age
+    var pb = q_draw;
+    for (var k = 1; k <= TAIL_STEPS; k++) {
+      pb -= f_world_of(law, pb) * TAIL_DT;
+      let fade = 1.0 - f32(k) / f32(TAIL_STEPS + 1);
+      splat(pb, col, wgt * fade * fade, pcg(hj + u32(k) * 0x9e3779b9u));
+    }
+  }
 }

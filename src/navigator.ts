@@ -159,13 +159,15 @@ export class CameraRig {
 
   /**
    * `recede` is a fraction of extra distance (e.g. while the map is open); `look` is the point the
-   * camera orbits and looks at, the centre of the attractor rather than always the origin.
+   * camera orbits and looks at (the centre of the attractor); `fit` scales the default distance so
+   * the attractor fills the frame, and gives way to the dive as it deepens.
    */
   update(
     input: Input,
     dt: number,
     recede = 0,
     look: readonly [number, number, number] = [0, 0, 0],
+    fit = 1,
   ): CameraState {
     this.time += dt;
     const target = Math.max(input.dive, input.hold ? 1 : 0);
@@ -177,7 +179,8 @@ export class CameraRig {
     if (this.dive === 0 || this.dive === 1) this.diveVel = 0;
 
     const ease = smoothstep(this.dive);
-    const dist = DIST_FAR * Math.pow(DIST_NEAR / DIST_FAR, ease) * (1 + recede);
+    const dist =
+      DIST_FAR * Math.pow(fit, 1 - ease) * Math.pow(DIST_NEAR / DIST_FAR, ease) * (1 + recede);
 
     const drift = 0.012 * this.time + 0.18 * Math.sin(this.time * 0.05);
     const az = input.yaw + input.orbitYaw + drift;

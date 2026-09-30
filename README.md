@@ -34,6 +34,21 @@ drifts the bead, and any touch takes over instantly.
 | Scatter every particle       | shake                             | `Space`             |
 | Parameter map, drag the bead | pinch, or tap the lens            | `M`                 |
 
+## Variants
+
+The same law, navigation and gestures in different art directions. They differ in light, colour,
+finish and sound. Pick one on the start screen, or with the `?v=<id>` switch, for example
+`https://yifei-fu.github.io/demo/?v=flame`.
+
+- `origin` (default): one light
+- `flame`: the heat of chaos
+- `ink`: one breath of ink
+- `prism`: light, split by glass
+- `abyss`: lit from within
+
+To add one, create `src/variants/<id>.ts` exporting `variant` (see `src/variants/types.ts`); the
+registry finds it by file. Then add a line to this list.
+
 ## Browser support
 
 AXIOM needs WebGPU: Safari on iOS / iPadOS 26+, Chrome or Edge on desktop and Android. Without
@@ -56,18 +71,20 @@ WebGPU it shows a static poster instead. On displays that support it, the canvas
 ```
 index.html  vite.config.ts  package.json
 src/
-  main.ts          boot, WebGPU check, start gate, frame loop, adaptive quality, test hooks
+  main.ts          boot: WebGPU + core, start gate, frame loop, adaptive quality, test hooks
+  engine.ts        the simulation-and-render pipeline, one `advance` per frame
   gpu.ts           device, canvas, HDR configuration
-  sensors.ts       tilt, touch, keyboard → one smoothed input
+  particles.ts     one fused compute pass: integrate, respawn, splat
+  post.ts          resolve, trails, dual-Kawase bloom, composite
+  shaders/*.wgsl   law, particles, post, map
+  sensors.ts       tilt, motion, touch, keys → one smoothed input (input.ts, pointers.ts)
   navigator.ts     bead physics, autopilot, camera rig
-  law.ts           bridge to the wasm law
-  particles.ts     integrate + splat pipelines
-  shaders/*.wgsl   law, particles, splat, post
-  post.ts          trails, bloom, tone mapping, grain
-  map.ts           Lyapunov / D_KY parameter map
-  audio.ts, audio-worklet.ts
-  hud.ts, style.css  start gate, fallback poster, lens, readout
-crates/axiom-core/ the law, spectrum and synth (Rust, cdylib → axiom.wasm)
+  wasm.ts, law.ts  the Rust core and its LawParams layout
+  map.ts, map-dom.ts   Lyapunov / D_KY parameter map and the lens
+  audio.ts, audio-worklet.ts, sound.ts   the attractor as sound
+  hud.ts, readout.ts, style.css   start gate, readout, fallback poster
+  variants/        one file (+ two WGSL functions) per art direction
+crates/axiom-core/ the law, Lyapunov spectrum and synth (Rust, cdylib → axiom.wasm)
 scripts/           build-wasm.sh, shots.mjs (visual QA)
 docs/DESIGN.md     the design contract
 ```
@@ -96,10 +113,14 @@ npm run shots -- --mode grid --n 32768 --frames 60   # 3×3 bead positions × 2 
 npm run shots -- --mode sweep                        # continuity: Δ between neighbouring frames
 npm run shots -- --mode sensors                      # deviceorientation, devicemotion, touch
 npm run shots -- --mode gate                         # start gate and no-WebGPU fallback
-# options: --desktop  --v <ids>  --seed  --out  --url <already-running server>
+npm run shots -- --mode variants --v origin,flame    # matrix: variants × 7 spots on the disk
+npm run shots -- --mode hero --v origin              # 430×932 @2x stills and a triptych (slow)
+# options: --desktop  --v <ids>  --n  --seed  --frames  --out  --port
+#          --query "k=v&k=v" (extra URL params, e.g. mapn=32)  --url <already-running server>
 ```
 
-URL flags for manual testing: `?seed=` `?v=` `?n=` `?debug` `?skipintro` `?capture`.
+URL flags for manual testing: `?seed=` `?v=` `?n=` `?debug` `?skipintro` `?capture` (plus `?mapn=`
+and `?mapsteps=` for the parameter map's resolution and speed).
 
 ## Deploy
 

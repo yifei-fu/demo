@@ -1,12 +1,12 @@
 /**
- * The lens: the parameter disk coloured by Kaplan-Yorke dimension, and the navigator it opens
- * into. A compute shader estimates the Lyapunov spectrum of the world field at every grid point
- * (progressively, a few RK4 steps per frame); a fragment shader draws the result. The DOM, the
- * open / close motion and the picking live in map-dom.ts.
+ * The lens: the parameter disk drawn by Kaplan-Yorke dimension, and the navigator it opens into.
+ * A compute shader estimates the Lyapunov spectrum of the world field at every grid point
+ * (progressively, a few RK4 steps per frame); a fragment shader draws the result as light on dark
+ * glass, or ink on paper. The DOM, the open / close motion and the picking live in map-dom.ts.
  */
 import { createShader, createUniform, type Gpu } from './gpu';
-import { LAW_LEN } from './law';
-import { MapView } from './map-dom';
+import { EXTENT, MapView } from './map-dom';
+import { anchorAngles, cssRgb, lawGrid } from './map-law';
 import { isPhone } from './platform';
 import lawWgsl from './shaders/law.wgsl?raw';
 import mapWgsl from './shaders/map.wgsl?raw';
@@ -23,6 +23,8 @@ export interface ParamMap {
 
 const GRID_PHONE = 128;
 const GRID_DESKTOP = 192;
+/** In `?capture` (QA on a software GPU) the grid is small and the whole estimate runs at once. */
+const GRID_CAPTURE = 48;
 /** Cells computed beyond the unit circle, so the smoothed field is right up to the rim. */
 const RIM_CELLS = 2.5;
 /** World time per RK4 step (the field's fastest eigenvalues are ~13), the finite-difference step
@@ -34,43 +36,19 @@ const T_TOTAL = 120;
 /** GPU time the progressive compute may take per frame, and the most steps it may take. */
 const BUDGET_MS = 2;
 const MAX_STEPS = 64;
-/** Steps per frame in `?capture`, where frames are deterministic. */
-const CAPTURE_STEPS = 200;
+/** Seconds between redraws of the twinkling grain: slow when a lens, quicker as a full map. */
+const REDRAW_LENS = 1 / 16;
+const REDRAW_OPEN = 1 / 30;
 const CELL_BYTES = 96;
 const PARAM_BYTES = 48;
-const LENS_BYTES = 32;
+const LENS_BYTES = 80;
 
 const COMPUTE_PASS: GPUComputePassDescriptor = { label: 'axiom map lyap' };
 
 /** Steps come in pairs: the tangent frame is re-orthonormalised every second step. */
 const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2);
 
-/** Any CSS colour to sRGB 0..1, by letting a 2D canvas parse it. */
-function cssRgb(css: string): [number, number, number] {
-  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-  if (!ctx) return [0.62, 0.72, 1];
-  ctx.fillStyle = '#9db8ff';
-  ctx.fillStyle = css;
-  ctx.fillRect(0, 0, 1, 1);
-  const p = ctx.getImageData(0, 0, 1, 1).data;
-  return [p[0] / 255, p[1] / 255, p[2] / 255];
-}
-
-/** Rust's law block for every cell of the grid (and a rim of cells beyond the circle). */
-function lawGrid(core: Core, seed: number, n: number, rim: number): Float32Array {
-  const laws = new Float32Array(n * n * LAW_LEN);
-  const lim = (1 + rim) * (1 + rim);
-  for (let j = 0; j < n; j++) {
-    const v = 1 - ((j + 0.5) / n) * 2;
-    for (let i = 0; i < n; i++) {
-      const u = ((i + 0.5) / n) * 2 - 1;
-      if (u * u + v * v > lim) continue;
-      const o = (j * n + i) * LAW_LEN;
-      core.lawParams(u, v, seed, laws.subarray(o, o + LAW_LEN));
-    }
-  }
-  return laws;
-}
+export type MapTheme = 'dark' | 'light';
 
 class Lens implements ParamMap {
   onPick: ((u: number, v: number) => void) | null = null;
@@ -97,11 +75,13 @@ class Lens implements ParamMap {
   private readonly lensData = new Float32Array(LENS_BYTES / 4);
   /** Fixed steps per frame (tests and `?capture`); otherwise the rate is measured and guarded. */
   private readonly pinned: boolean;
+  private readonly still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   private remaining = even(T_TOTAL / DT);
   private stepsPerFrame = 0;
   private fresh = true;
   private dirty = true;
+  private drawnAt = 0;
   private disposed = false;
   private lastNow = 0;
   private slow = 0;
@@ -112,18 +92,21 @@ class Lens implements ParamMap {
     private readonly seed: number,
     host: HTMLElement,
     accent: string,
+    theme: MapTheme,
   ) {
     const device = (this.device = gpu.device);
     const q = new URLSearchParams(location.search);
+    const capture = q.has('capture');
     const gridFlag = Number(q.get('mapn'));
-    this.n =
-      gridFlag >= 16 ? Math.min(256, Math.floor(gridFlag)) : isPhone() ? GRID_PHONE : GRID_DESKTOP;
+    const grid = capture ? GRID_CAPTURE : isPhone() ? GRID_PHONE : GRID_DESKTOP;
+    this.n = gridFlag >= 16 ? Math.min(256, Math.floor(gridFlag)) : grid;
     this.rim = (RIM_CELLS * 2) / this.n;
     this.groups = Math.ceil(this.n / 8);
     // ?mapsteps= pins the rate; so does ?capture, whose frames must not depend on the wall clock
+    // (there the whole estimate runs in the first frame)
     const stepsFlag = Number(q.get('mapsteps'));
-    this.pinned = stepsFlag >= 2 || q.has('capture');
-    if (this.pinned) this.stepsPerFrame = even(stepsFlag >= 2 ? stepsFlag : CAPTURE_STEPS);
+    this.pinned = stepsFlag >= 2 || capture;
+    if (this.pinned) this.stepsPerFrame = stepsFlag >= 2 ? even(stepsFlag) : this.remaining;
 
     const laws = lawGrid(core, seed, this.n, this.rim);
     const lawBuf = device.createBuffer({
@@ -181,7 +164,7 @@ class Lens implements ParamMap {
       ],
     });
 
-    this.view = new MapView(host, accent, {
+    this.view = new MapView(host, accent, theme, {
       pick: (u, v) => this.onPick?.(u, v),
       toggle: (open) => {
         this.setOpen(open);
@@ -203,7 +186,9 @@ class Lens implements ParamMap {
         },
       ],
     };
-    this.lensData.set([...cssRgb(accent), 0, this.n]);
+    this.lensData.set([...cssRgb(accent), 0, this.n, 0, 0, 0, theme === 'light' ? 1 : 0]);
+    this.lensData.fill(9, 12);
+    this.lensData.set(anchorAngles(core, seed), 12);
     if (!this.pinned) void this.calibrate();
   }
 
@@ -215,7 +200,7 @@ class Lens implements ParamMap {
     if (!this.disposed) this.view.setOpen(open);
   }
 
-  frame(encoder: GPUCommandEncoder, bead: [number, number], _time: number): void {
+  frame(encoder: GPUCommandEncoder, bead: [number, number], time: number): void {
     if (this.disposed) return;
     this.view.placeBead(bead[0], bead[1]);
     if (this.remaining > 0 && this.stepsPerFrame > 0) {
@@ -223,7 +208,9 @@ class Lens implements ParamMap {
       this.dirty = true;
       this.guardFrameTime();
     }
-    if (this.dirty) this.draw(encoder);
+    // the grain twinkles, so the lens redraws at its own gentle rate (never, if motion is reduced)
+    const every = this.still ? Infinity : this.view.isOpen ? REDRAW_OPEN : REDRAW_LENS;
+    if (this.dirty || Math.abs(time - this.drawnAt) >= every) this.draw(encoder, time);
   }
 
   dispose(): void {
@@ -300,12 +287,16 @@ class Lens implements ParamMap {
     }
   }
 
-  private draw(enc: GPUCommandEncoder): void {
+  private draw(enc: GPUCommandEncoder, time: number): void {
     this.dirty = false;
+    this.drawnAt = time;
     const canvas = this.view.canvas;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
     this.lensData[3] = this.view.isOpen ? 1 : 0;
     this.lensData[5] = canvas.width;
-    this.lensData[6] = Math.min(window.devicePixelRatio || 1, 3);
+    this.lensData[6] = dpr;
+    this.lensData[7] = canvas.width / dpr / (2 * EXTENT);
+    this.lensData[9] = this.still ? 0 : time % 1000;
     this.device.queue.writeBuffer(this.lensBuf, 0, this.lensData);
     const attachment = (this.pass.colorAttachments as GPURenderPassColorAttachment[])[0];
     attachment.view = this.ctx.getCurrentTexture().createView();
@@ -320,7 +311,7 @@ class Lens implements ParamMap {
   private redraw(): void {
     if (this.disposed) return;
     const enc = this.device.createCommandEncoder();
-    this.draw(enc);
+    this.draw(enc, this.drawnAt);
     this.device.queue.submit([enc.finish()]);
   }
 }
@@ -331,6 +322,7 @@ export function createParamMap(
   seed: number,
   host: HTMLElement,
   accent: string,
+  theme: MapTheme = 'dark',
 ): ParamMap {
-  return new Lens(gpu, core, seed >>> 0, host, accent);
+  return new Lens(gpu, core, seed >>> 0, host, accent, theme);
 }

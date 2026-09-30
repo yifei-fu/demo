@@ -22,6 +22,7 @@ export interface Core {
   lawParams(u: number, v: number, seed: number, out?: Float32Array): Float32Array;
   /** Advance the spectrum probe by `worldTime` world-time units along the given law. */
   spectrumStep(params: Float32Array, worldTime: number): void;
+  /** The same object every call, refilled: copy what you need to keep. */
   spectrumRead(): SpectrumReading;
 }
 
@@ -53,24 +54,47 @@ export async function loadCore(seed: number): Promise<Core> {
   const paramPtr = x.alloc(LAW_LEN * 4);
   const readPtr = x.alloc(READ_LEN * 4);
   const spectrum = x.spectrum_new(seed >>> 0);
-  const view = (ptr: number, n: number): Float32Array => new Float32Array(x.memory.buffer, ptr, n);
+  // Views are cached per memory buffer: nothing is allocated per call unless the memory grew.
+  let buffer: ArrayBuffer | null = null;
+  let lawView = new Float32Array(0);
+  let paramView = new Float32Array(0);
+  let readView = new Float32Array(0);
+  const views = (): void => {
+    if (buffer === x.memory.buffer) return;
+    buffer = x.memory.buffer;
+    lawView = new Float32Array(buffer, lawPtr, LAW_LEN);
+    paramView = new Float32Array(buffer, paramPtr, LAW_LEN);
+    readView = new Float32Array(buffer, readPtr, READ_LEN);
+  };
+  const reading: SpectrumReading = { l1: 0, l2: 0, l3: 0, dky: 0, regime: 0, tracer: [0, 0, 0] };
 
   return {
     bytes,
     anchorCount: x.law_anchor_count(),
     lawParams(u, v, s, out = new Float32Array(LAW_LEN)) {
       x.law_params(u, v, s >>> 0, lawPtr);
-      out.set(view(lawPtr, LAW_LEN));
+      views();
+      out.set(lawView);
       return out;
     },
     spectrumStep(params, worldTime) {
-      view(paramPtr, LAW_LEN).set(params);
+      views();
+      paramView.set(params);
       x.spectrum_step(spectrum, paramPtr, worldTime);
     },
     spectrumRead() {
       x.spectrum_read(spectrum, readPtr);
-      const r = view(readPtr, READ_LEN);
-      return { l1: r[0], l2: r[1], l3: r[2], dky: r[3], regime: r[4], tracer: [r[5], r[6], r[7]] };
+      views();
+      const r = readView;
+      reading.l1 = r[0];
+      reading.l2 = r[1];
+      reading.l3 = r[2];
+      reading.dky = r[3];
+      reading.regime = r[4];
+      reading.tracer[0] = r[5];
+      reading.tracer[1] = r[6];
+      reading.tracer[2] = r[7];
+      return reading;
     },
   };
 }

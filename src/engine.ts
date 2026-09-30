@@ -1,6 +1,7 @@
 /** Owns the simulation-and-render pipeline; `advance` is one frame, whether from rAF or a test. */
 import { backingSize, type Gpu } from './gpu';
 import type { ParamMap } from './map';
+import { Framing } from './framing';
 import { Bead, CameraRig, DIST_FAR } from './navigator';
 import { Particles, type StirParams } from './particles';
 import { Post, settingsFor, type PostSettings } from './post';
@@ -10,9 +11,11 @@ import { LAW_LEN } from './law';
 import type { Core, SpectrumReading } from './wasm';
 
 const STIR_STRENGTH = 1;
-/** The camera follows the attractor's centroid (a slow average of the spectrum probe). */
-const CENTER_TAU = 3;
-const CENTER_FOLLOW = 0.9;
+/** Simulated seconds run at load, before the first frame is drawn. */
+const WARMUP_SECONDS = 9;
+const WARMUP_DT = 0.05;
+/** Frames between extent readbacks. */
+const EXTENT_EVERY = 6;
 /** Diving magnifies the cloud; density is lifted by (default distance / distance)^p, capped. */
 const ZOOM_GAIN_POWER = 1.5;
 const MAX_ZOOM_GAIN = 14;
@@ -52,7 +55,9 @@ export class Engine {
   private mapAmount = 0;
   private pinchAcc = 0;
   private trailBias = 0;
-  private readonly center: [number, number, number] = [0, 0, 0];
+  private readonly framing = new Framing();
+  private readonly beadPos: [number, number] = [0, 0];
+  private readonly frameSettings: PostSettings;
   private stirGain = 0;
   private hookStir: { x: number; y: number; strength: number; left: number } | null = null;
   private sinceReset = 0;
@@ -68,6 +73,7 @@ export class Engine {
     this.particles = new Particles(gpu, particleCount, seed, variant);
     this.post = new Post(gpu, variant);
     this.settings = settingsFor(variant);
+    this.frameSettings = { ...this.settings };
     this.sensors.onShake = () => this.particles.shake();
     this.updateLaw();
     this.spectrum = core.spectrumRead();
@@ -131,7 +137,14 @@ export class Engine {
     this.core.spectrumStep(this.law, SPECTRUM_STEP);
     this.spectrum = this.core.spectrumRead();
     this.particles.setLaw(this.law);
-    const cam = this.rig.update(input, dt, this.mapAmount * MAP_RECEDE, this.followCenter(dt));
+    this.framing.update(this.particles.extent.value, dt);
+    const cam = this.rig.update(
+      input,
+      dt,
+      this.mapAmount * MAP_RECEDE,
+      this.framing.center,
+      this.framing.scale,
+    );
 
     const stir = this.stirParams(input.stir, dt);
     this.time += dt;
@@ -139,6 +152,7 @@ export class Engine {
 
     const enc = this.gpu.device.createCommandEncoder({ label: 'frame' });
     if (render) this.post.beginFrame(enc);
+    this.particles.extent.clear(enc);
     this.particles.encode(enc, {
       cam,
       dt,
@@ -149,6 +163,7 @@ export class Engine {
       stir,
       splat: render,
     });
+    if (this.frame % EXTENT_EVERY === 0) this.particles.extent.request(enc);
     if (render) {
       // ramp trail persistence up from zero after any gap so a fresh image is a plain average
       const n = this.sinceReset++;
@@ -158,37 +173,50 @@ export class Engine {
         ((REGIME_TRAIL[this.spectrum.regime] ?? 0) - this.trailBias) * (1 - Math.exp(-dt / 1.5));
       const breathAmp = this.begun ? 0.015 : 0.05;
       const breath = 1 + breathAmp * Math.sin((this.time * Math.PI * 2) / 6.5);
+      const fs = this.frameSettings;
+      Object.assign(fs, s);
+      fs.trail = Math.min((s.trail + this.trailBias) * still, n / (n + 1));
+      fs.breath = breath * (1 - MAP_DIM * this.mapAmount);
       this.post.encode(
         enc,
         this.gpu.context.getCurrentTexture().createView(),
-        {
-          ...s,
-          trail: Math.min((s.trail + this.trailBias) * still, n / (n + 1)),
-          breath: breath * (1 - MAP_DIM * this.mapAmount),
-        },
+        fs,
         this.particles.active,
         this.time,
         Math.min(MAX_ZOOM_GAIN, (DIST_FAR / cam.dist) ** ZOOM_GAIN_POWER),
       );
-      this.map?.frame(enc, [this.bead.u, this.bead.v], this.time);
+      this.beadPos[0] = this.bead.u;
+      this.beadPos[1] = this.bead.v;
+      this.map?.frame(enc, this.beadPos, this.time);
     } else {
       this.sinceReset = 0;
     }
     this.gpu.device.queue.submit([enc.finish()]);
+    this.particles.extent.collect();
+  }
+
+  /**
+   * Resolves once every requested extent readback has landed. Frames run in a tight loop by tests
+   * would otherwise see the camera framing depend on GPU timing.
+   */
+  extentLanded(): Promise<void> | null {
+    return this.particles.extent.busy;
+  }
+
+  /**
+   * Run the simulation without drawing, so the first frame anyone sees is a cloud that has already
+   * fallen into its attractor, with the inward streams in full flow, rather than a random ball.
+   */
+  async warmUp(seconds = WARMUP_SECONDS): Promise<void> {
+    for (let t = 0; t < seconds; t += WARMUP_DT) {
+      this.advance(WARMUP_DT, false);
+      await this.extentLanded();
+    }
+    await this.settled();
   }
 
   settled(): Promise<void> {
     return this.gpu.device.queue.onSubmittedWorkDone();
-  }
-
-  /** Slowly track the attractor's centre so off-centre attractors sit in the middle of the frame. */
-  private followCenter(dt: number): [number, number, number] {
-    const k = 1 - Math.exp(-dt / CENTER_TAU);
-    const t = this.spectrum.tracer;
-    const c = this.center;
-    for (let i = 0; i < 3; i++)
-      if (Number.isFinite(t[i])) c[i] += (t[i] * CENTER_FOLLOW - c[i]) * k;
-    return c;
   }
 
   private updateLaw(): void {
