@@ -54,9 +54,15 @@ fn ink_fibres(p: vec2f) -> f32 {
 }
 
 // ------------------------------------------------------------------ hanko
-// The artist's seal, stamped in the paper's lower-right margin: a rounded square of vermilion with an
-// axis, a base line and a drop carved out of it. Tiny, static, and a little uneven, like a real
-// stamp. p is in frame-height units (852 per frame height).
+// smooth union: fillets the corners where carved strokes meet, so the cut looks made, not drawn
+fn ink_smin(a: f32, b: f32, k: f32) -> f32 {
+  let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// The artist's seal, stamped in the paper's lower-right margin: a rounded square of vermilion with
+// 由 ("origin") carved out of it. Tiny, static, and a little uneven, like a real stamp. p is in
+// frame-height units (852 per frame height).
 fn ink_seal(p: vec2f, aspect: f32) -> f32 {
   let c = vec2f(aspect * 852.0 - 56.0, 852.0 - 50.0);
   let ca = cos(0.06);
@@ -68,14 +74,20 @@ fn ink_seal(p: vec2f, aspect: f32) -> f32 {
   // the field: a rounded square whose edge is eaten a little by the paper's tooth
   let dq = length(max(abs(q) - vec2f(0.78), vec2f(0.0))) - 0.22;
   let field = 1.0 - smoothstep(-0.02 + 0.10 * e, 0.06 + 0.10 * e, dq);
-  // the carving is 由, "origin": a stroke through a box with a bar inside it
-  let stem = max(abs(q.x) - 0.065, abs(q.y + 0.22) - 0.44);
-  let box_l = max(abs(q.x + 0.46) - 0.065, abs(q.y - 0.26) - 0.36);
-  let box_r = max(abs(q.x - 0.46) - 0.065, abs(q.y - 0.26) - 0.36);
-  let box_b = max(abs(q.x) - 0.52, abs(q.y - 0.56) - 0.065);
-  let box_t = max(abs(q.x) - 0.52, abs(q.y + 0.10) - 0.065);
-  let bar = max(abs(q.x) - 0.46, abs(q.y - 0.22) - 0.055);
-  let glyph = min(min(min(stem, box_l), min(box_r, box_b)), min(box_t, bar));
+  // the carving (baiwen: paper strokes on red) is 由, "origin": a square box cut into four cells by a
+  // cross, whose vertical runs on above the box by a fifth of its height. One weight throughout, and
+  // a hair of wobble, because a knife cut it.
+  let g = q + 0.030 * vec2f(ink_vnoise(p * 0.32) - 0.5, ink_vnoise(p * 0.32 + 5.0) - 0.5);
+  let w = 0.062;
+  let stem = max(abs(g.x) - w, abs(g.y) - 0.59);
+  let box_l = max(abs(g.x + 0.428) - w, abs(g.y - 0.098) - 0.492);
+  let box_r = max(abs(g.x - 0.428) - w, abs(g.y - 0.098) - 0.492);
+  let box_t = max(abs(g.x) - 0.49, abs(g.y + 0.332) - w);
+  let box_b = max(abs(g.x) - 0.49, abs(g.y - 0.528) - w);
+  let bar = max(abs(g.x) - 0.49, abs(g.y - 0.098) - w);
+  let k = 0.05;
+  let frame = ink_smin(ink_smin(box_l, box_r, k), ink_smin(box_t, box_b, k), k);
+  let glyph = ink_smin(ink_smin(stem, bar, k), frame, k);
   let carve = 1.0 - smoothstep(-0.02, 0.05, glyph);
   // uneven pressure: the stamp takes more colour in some places
   let press = 0.80 + 0.20 * ink_vnoise(p * 0.21 + 11.0);
