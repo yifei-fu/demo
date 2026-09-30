@@ -135,6 +135,14 @@ Halvorsen a=1.89.
 of each arc. World time ≈ real seconds; a loop takes about 4 s. Respawn particles with |x| > 1.6. Keep the
 RK2 substep dt ≤ 0.03.
 
+**As built (round 2):** the rim order is a fixed cycle (Thomas, Lorenz, Aizawa, Rössler) so
+Lorenz and Rössler never blend. The seed picks the starting anchor, the direction, θ_seed and
+the rotations. Blend width is 0.25. `omega` varies (≈ 5.5 on Thomas's labyrinth). A regime is
+labelled "fixed" only when the tracer has actually stopped. Disk shares: ≈ 15 % fixed, 23 % cycle,
+10 % torus, 45 % strange and 8 % labyrinth, with < 4 % fixed at r ≥ 0.7. Chaotic particle speed
+is 0.4–1.4 world units per second. Sound presets 0–3 are implemented. The release profile no
+longer sets `panic="abort"`; `scripts/build-wasm.sh` passes it via RUSTFLAGS.
+
 Each anchor has a **radial route**: its parameters (and its normalisation `c`, `L`, `τ`, `ω`) are
 smooth functions of `r ∈ [0,1]`, calibrated so that **r = 0 is a stable fixed point mapped to the
 world origin**, then Hopf → cycle → (torus for Aizawa) → chaos, with the attractor kept roughly
