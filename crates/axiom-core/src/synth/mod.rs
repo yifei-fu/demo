@@ -1,25 +1,33 @@
 //! The sound of the attractor (DESIGN.md §1 "Sound", §4 ids).
 //!
-//! Six probe trajectories integrate the *same world field* the particles fly
-//! through, at audio rate. Probe k advances `h_k = 2π f_k / (ω · sr)` world
-//! units per sample, so the law's characteristic angular frequency ω lands on
-//! the just-intonation harmonic `f_k = root · n_k`. What you hear is therefore
-//! the dynamics themselves: a fixed point is silence, a Hopf bifurcation a tone
-//! that swells out of the noise floor, a cycle a pitched timbre, a torus
-//! beating, chaos breathing noise.
+//! **Probes.** Six probe trajectories integrate the *same world field* the
+//! particles fly through, at audio rate. Probe k advances
+//! `h_k = 2π f_k / (ω · sr)` world units per sample, where ω is the law's
+//! characteristic angular frequency (`Law::omega`), so ω lands on the
+//! just-intonation harmonic `f_k = root · n_k` (n_k six distinct picks from
+//! 2…12, per seed). What you hear is therefore the dynamics themselves: a
+//! fixed point is silence, a Hopf bifurcation a tone that swells out of the
+//! noise floor, a cycle a pitched timbre, a torus beating, chaos breathing
+//! noise. A little state noise (a diffusion, so its size per world unit does
+//! not depend on the probe's rate) seeds the bifurcation; stir kicks the
+//! probes harder; a shake scatters them and they fall back audibly.
 //!
-//! Presets (`synth_set` id 4) are different *voices* on the same probes, law,
-//! drone, wind and reverb; switching cross-fades them. 0 · classic tones,
-//! 1 · Ink (a pluck whenever a probe crosses its own section), 2 · Prism (FM
-//! glass), 3 · Abyss (deep, swept, bubbling, with a shimmer of high lights).
+//! **Voices.** Presets (`synth_set` id 4) are different voices on the same
+//! probes, law, drone, wind and reverb; switching cross-fades them. 0 · Flame
+//! (the classic voice: each probe's signal, band-limited and levelled, plus
+//! a copy ring-modulated by its fourth harmonic, so a phone speaker that
+//! gives nothing below 200 Hz still has something to play), 1 · Ink (a Karplus–Strong pluck whenever a probe
+//! crosses its own section), 2 · Prism (FM glass). Any other id selects 0.
 //!
-//! Three things make the raw dynamics presentable. Onsets are *swells*: a
-//! bifurcation grows in milliseconds at audio-rate probes, so a rise limiter
-//! (`dsp::Rise`) keeps any level from climbing faster than 20 dB per second.
-//! Every voice has energy above 200 Hz (phone speakers give nothing below),
-//! generated from the probes' own motion, and the presets are level matched.
+//! **Swells.** A Hopf bifurcation grows in milliseconds at audio-rate probes,
+//! so a raw onset is a pop. A rise limiter (`dsp::Rise`) on each probe, and on
+//! the whole Prism voice (whose phase-locked bells add coherently), keeps any
+//! level from climbing faster than 20 dB per second: a peak detector is
+//! followed by a ceiling that climbs at that rate toward 1.4 × the peak, and
+//! the gain is `ceiling / peak` while the peak is above it. Steady and
+//! wandering levels pass at unity; only a real onset becomes a swell. The
+//! output stage is a slow limiter and a soft clip that never exceeds 0.9.
 
-mod abyss;
 mod classic;
 mod drone;
 mod dsp;
@@ -68,24 +76,23 @@ const CONTROL_EVERY: usize = 16;
 /// How fast a preset fades in and out.
 const CROSSFADE: f32 = 0.12;
 
-/// Which voice the probes feed.
+/// Which voice the probes feed. `Classic` is Flame's voice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Preset {
     Classic = 0,
     Ink = 1,
     Prism = 2,
-    Abyss = 3,
 }
 
-const PRESETS: [Preset; 4] = [Preset::Classic, Preset::Ink, Preset::Prism, Preset::Abyss];
+const PRESETS: [Preset; 3] = [Preset::Classic, Preset::Ink, Preset::Prism];
 
 /// The room and mix each preset asks for.
 struct Look {
     rt60: f32,
     damp: f32,
     wet: f32,
-    /// Level of the drone partials [½, 1, 1.5, 2, 3, 4, 6] × root.
-    drone: [f32; 7],
+    /// Level of the drone partials [1, 2, 3, 4, 6] × root.
+    drone: [f32; 5],
     wind: f32,
 }
 
@@ -100,7 +107,7 @@ impl Preset {
                 rt60: 3.6,
                 damp: 0.32,
                 wet: 0.22,
-                drone: [0.0, 0.5, 0.0, 0.6, 0.4, 0.3, 0.15],
+                drone: [0.5, 0.6, 0.4, 0.3, 0.15],
                 wind: 1.0,
             },
             // Dry and intimate: a small room.
@@ -108,7 +115,7 @@ impl Preset {
                 rt60: 0.45,
                 damp: 0.45,
                 wet: 0.11,
-                drone: [0.0, 0.2, 0.0, 0.25, 0.12, 0.0, 0.0],
+                drone: [0.2, 0.25, 0.12, 0.0, 0.0],
                 wind: 0.6,
             },
             // Long and bright.
@@ -116,16 +123,8 @@ impl Preset {
                 rt60: 5.8,
                 damp: 0.05,
                 wet: 0.42,
-                drone: [0.0, 0.25, 0.0, 0.3, 0.4, 0.5, 0.45],
+                drone: [0.25, 0.3, 0.4, 0.5, 0.45],
                 wind: 0.7,
-            },
-            // Very long and dark, with a sub drone.
-            Preset::Abyss => Look {
-                rt60: 9.5,
-                damp: 0.72,
-                wet: 0.55,
-                drone: [0.7, 0.5, 0.3, 0.2, 0.0, 0.0, 0.0],
-                wind: 0.3,
             },
         }
     }
@@ -154,12 +153,11 @@ impl Preset {
     }
 
     /// The rate (Hz) a probe with harmonic `mul` is driven at. Ink runs its
-    /// probes at rhythm speed: each z = 0 crossing is then a note, not a cycle
-    /// of the waveform.
+    /// probes at rhythm speed: each crossing of a probe's section is then a
+    /// note, not a cycle of the waveform.
     fn probe_hz(self, root_hz: f32, mul: f32) -> f32 {
         match self {
             Preset::Classic | Preset::Prism => root_hz * mul,
-            Preset::Abyss => 0.5 * root_hz * mul,
             Preset::Ink => 0.25 * mul,
         }
     }
@@ -211,7 +209,6 @@ pub(crate) struct ProbeView {
 pub(crate) struct Ctx {
     pub sr: f32,
     pub root_hz: f32,
-    pub stir: f32,
     /// Low-pass coefficient of the classic voice (follows D, dive, chaos).
     pub lp_a: f32,
     pub rms_k: f32,
@@ -228,7 +225,6 @@ impl Ctx {
         Ctx {
             sr,
             root_hz,
-            stir: 0.0,
             lp_a: 0.1,
             rms_k: smoothing(1.0 / sr, 0.4),
             swell_up: (SWELL_RATE_DB * std::f32::consts::LN_10 / 20.0 / sr).exp(),
@@ -254,13 +250,12 @@ pub struct Synth {
     boost: f32,
     diffusion: f32,
     preset: Preset,
-    levels: [Ramp; 4],
+    levels: [Ramp; 3],
     probes: [Probe; PROBES],
     ctx: Ctx,
     classic: classic::Classic,
     ink: ink::Ink,
     prism: prism::Prism,
-    abyss: abyss::Abyss,
     drone: drone::Drone,
     wind: wind::Wind,
     wet: f32,
@@ -315,18 +310,12 @@ impl Synth {
             boost: 0.0,
             diffusion: Preset::Classic.diffusion(),
             preset: Preset::Classic,
-            levels: [
-                Ramp::new(1.0),
-                Ramp::new(0.0),
-                Ramp::new(0.0),
-                Ramp::new(0.0),
-            ],
+            levels: [Ramp::new(1.0), Ramp::new(0.0), Ramp::new(0.0)],
             probes,
             ctx: Ctx::new(sr, root_hz),
             classic: classic::Classic::default(),
             ink: ink::Ink::new(sr),
             prism: prism::Prism::default(),
-            abyss: abyss::Abyss::new(&mut rng),
             drone: drone::Drone::new(look.drone),
             wind: wind::Wind::default(),
             wet: look.wet,
@@ -427,11 +416,10 @@ impl Synth {
         self.omega += (self.omega_target - self.omega) * k(0.3) as f64;
         self.ctx.lp_a = self.cutoff_coeff();
         self.ctx.root_hz = self.root_hz;
-        self.ctx.stir = self.stir.cur;
         let look = self.preset.look();
         self.wet += (look.wet + 0.5 * self.dive.cur + 0.1 * self.chaos() - self.wet) * k(0.4);
         self.fdn.glide(k(0.6));
-        self.drone.control(dt, self.sr);
+        self.drone.control(dt);
         self.wind.control(dt, self.sr, self.dive.cur);
         self.boost += (self.preset.rest_boost() - self.boost) * k(0.25);
         self.diffusion += (self.preset.diffusion() - self.diffusion) * k(0.25);
@@ -504,7 +492,6 @@ impl Synth {
                 Preset::Classic => self.classic.tick(&views, &self.ctx),
                 Preset::Ink => self.ink.tick(&views, &self.ctx, &mut self.rng),
                 Preset::Prism => self.prism.tick(&views, &self.ctx),
-                Preset::Abyss => self.abyss.tick(&views, &self.ctx, &mut self.rng),
             };
             bus_l += level * l;
             bus_r += level * r;

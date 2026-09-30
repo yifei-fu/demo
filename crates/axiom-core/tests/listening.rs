@@ -1,4 +1,5 @@
-//! What the listening analysis found, encoded (Round 4).
+//! What the listening analysis found, encoded, for the three shipped voices:
+//! Flame (preset 0, root 55 Hz), Ink (1, 65.4 Hz) and Prism (2, 73.4 Hz).
 //!
 //! An offline render of the real synth along the app's own path (law refreshed
 //! at 30 Hz from `write_params`, λ1 and D from the live spectrum tracker) was
@@ -6,7 +7,7 @@
 //!
 //!   1. a Hopf onset was a pop, not a swell;
 //!   2. Ink stayed silent through the Hopf region at navigation speed;
-//!   3. Ink was bright and ten decibels quieter than the classic voice;
+//!   3. Ink was bright and ten decibels quieter than Flame;
 //!   4. phone speakers (nothing below ~200 Hz) got almost none of it;
 //!   5. the shake was barely audible;
 //!   6. the presets differed in loudness by several decibels.
@@ -20,18 +21,15 @@ use std::sync::OnceLock;
 const SR: f32 = 48_000.0;
 const QUANTUM: usize = 128;
 
-const CLASSIC: u32 = 0;
+const FLAME: u32 = 0;
 const INK: u32 = 1;
 const PRISM: u32 = 2;
-const ABYSS: u32 = 3;
 
-/// (name, preset id, root Hz): the four voices and the classic origin variant.
-const VOICES: [(&str, u32, f32); 5] = [
-    ("classic", CLASSIC, 55.0),
+/// (name, preset id, root Hz). Flame is the reference the others are matched to.
+const VOICES: [(&str, u32, f32); 3] = [
+    ("flame", FLAME, 55.0),
     ("ink", INK, 65.4),
     ("prism", PRISM, 73.4),
-    ("abyss", ABYSS, 41.2),
-    ("classic-110", CLASSIC, 110.0),
 ];
 
 fn block(u: f64, v: f64, seed: u32) -> [f32; PARAMS_LEN] {
@@ -354,9 +352,8 @@ fn energy_mean_db(levels: &[f64]) -> f64 {
 
 #[test]
 fn every_preset_has_energy_above_the_phone_speaker_cutoff() {
-    // Phone speakers give nothing below ~200 Hz. Before: the classic voice on
-    // the Thomas labyrinth put 93% of its energy under 200 Hz, Abyss 80–100%
-    // everywhere (−63 dBFS above 200 Hz at the centre).
+    // Phone speakers give nothing below ~200 Hz. Before: Flame on the Thomas
+    // labyrinth put 93% of its energy under 200 Hz.
     for (vi, (name, _, _)) in VOICES.iter().enumerate() {
         for &(seg, t0, t1) in &SEGMENTS[ACTIVE] {
             let (_, high) = centroid_and_high_share(slice(&journeys()[vi].control, t0, t1), SR);
@@ -367,16 +364,10 @@ fn every_preset_has_energy_above_the_phone_speaker_cutoff() {
             );
         }
     }
-    // Abyss at the centre is a sub drone, but no longer inaudible on a phone.
-    let centre = SEGMENTS[0];
-    let audio = slice(&journeys()[3].control, centre.1, centre.2);
-    let (_, high) = centroid_and_high_share(audio, SR);
-    let above = level(audio) + 10.0 * high.log10();
-    assert!(above > -50.0, "abyss centre above 200 Hz: {above:.1} dBFS");
 }
 
 #[test]
-fn presets_are_level_matched_to_the_classic_voice() {
+fn presets_are_level_matched_to_flame() {
     let reference = active_levels(0);
     let mean = energy_mean_db(&reference);
     for (vi, (name, _, _)) in VOICES.iter().enumerate().skip(1) {
@@ -384,7 +375,7 @@ fn presets_are_level_matched_to_the_classic_voice() {
         let m = energy_mean_db(&levels);
         assert!(
             (m - mean).abs() <= 1.5,
-            "{name}: {m:.1} dB against the classic voice's {mean:.1} dB"
+            "{name}: {m:.1} dB against Flame's {mean:.1} dB"
         );
         for (i, (l, r)) in levels.iter().zip(&reference).enumerate() {
             assert!(
@@ -397,7 +388,7 @@ fn presets_are_level_matched_to_the_classic_voice() {
 }
 
 #[test]
-fn ink_is_soft_and_as_loud_as_the_classic_voice() {
+fn ink_is_soft_and_as_loud_as_flame() {
     // Before: centroid 2.2–3.8 kHz in the chaotic segments and 10 dB down.
     for &(seg, t0, t1) in &SEGMENTS[3..9] {
         let (centroid, _) = centroid_and_high_share(slice(&journeys()[1].control, t0, t1), SR);
@@ -406,13 +397,13 @@ fn ink_is_soft_and_as_loud_as_the_classic_voice() {
             "ink in {seg}: centroid {centroid:.0} Hz"
         );
     }
-    let (ink, classic) = (
+    let (ink, flame) = (
         energy_mean_db(&active_levels(1)),
         energy_mean_db(&active_levels(0)),
     );
     assert!(
-        (ink - classic).abs() <= 2.0,
-        "ink {ink:.1} dB, classic {classic:.1} dB"
+        (ink - flame).abs() <= 2.0,
+        "ink {ink:.1} dB, flame {flame:.1} dB"
     );
 }
 
@@ -450,8 +441,7 @@ fn worst_rise(levels: &[f64]) -> f64 {
 
 #[test]
 fn a_hopf_onset_swells_instead_of_popping_on_the_journey() {
-    // Before: +10 dB per 100 ms on classic and prism at r ≈ 0.35, and the same
-    // on the origin variant (root 110).
+    // Before: +10 dB per 100 ms on Flame and Prism at r ≈ 0.35.
     for (vi, (name, _, _)) in VOICES.iter().enumerate() {
         if vi == 1 {
             continue; // Ink's notes are struck, not swelled: see below
@@ -467,10 +457,8 @@ fn a_hopf_onset_swells_instead_of_popping_on_the_journey() {
             "{name}: level rose {worst:.1} dB in 100 ms on the way to the Hopf"
         );
         let loudest = levels.iter().cloned().fold(f64::MIN, f64::max);
-        // (Abyss sits on a loud sub drone even at the centre.)
-        let needed = if vi == 3 { 2.0 } else { 8.0 };
         assert!(
-            loudest > centre + needed,
+            loudest > centre + 8.0,
             "{name}: the Hopf tone never emerged ({centre:.1} -> {loudest:.1} dB)"
         );
     }
@@ -481,7 +469,7 @@ fn a_hopf_onset_swells_instead_of_popping_on_a_ramp() {
     // The bead leaves the centre at 0.15 r/s, the fastest of the app's easing,
     // on three seeds.
     let mut failures = Vec::new();
-    for (name, preset, root) in [VOICES[0], VOICES[2], VOICES[3], VOICES[4]] {
+    for (name, preset, root) in [VOICES[0], VOICES[2]] {
         for seed in [1, 7, 42] {
             let audio = ramp(preset, root, seed, 180.0, 0.15, 4.0);
             let levels = window_levels(&audio, 0.1, SR);
@@ -497,7 +485,7 @@ fn a_hopf_onset_swells_instead_of_popping_on_a_ramp() {
                 let line: Vec<String> = levels[30..].iter().map(|l| format!("{l:.0}")).collect();
                 eprintln!("   {}", line.join(" "));
             }
-            if loudest <= centre + if preset == ABYSS { 2.0 } else { 8.0 } {
+            if loudest <= centre + 8.0 {
                 failures.push(format!("{name} seed {seed}: no tone emerged"));
             }
             if worst > 3.0 {
@@ -547,7 +535,7 @@ fn ink_starts_playing_as_the_bead_leaves_the_centre() {
     // Before: silent through the Hopf region, first note at r ≈ 0.6–0.75 (or
     // never). The bead moves at 0.15 r/s; the Hopf sits at r ≈ 0.26–0.37.
     // (In the directions listed the Hopf comes early; along the others every
-    // voice, the classic one too, only wakes at r ≈ 0.5.)
+    // voice, Flame too, only wakes at r ≈ 0.5.)
     for (seed, angle) in [
         (1, 90.0),
         (1, 180.0),
@@ -619,8 +607,7 @@ fn ink_is_silent_at_a_true_fixed_point() {
 
 #[test]
 fn a_shake_is_an_unmistakable_but_soft_event() {
-    // Before: +1.2 dB (classic), +1.1 (prism), +0.4 (abyss) over the first
-    // 0.6 s. Now +6 to +8 dB, and back within 2.5 dB a second and a half on.
+    // Before: +1.2 dB (Flame) and +1.1 (Prism) over the first 0.6 s. Now +6 to +8 dB, and back within 2.5 dB a second and a half on.
     for (vi, (name, _, _)) in VOICES.iter().enumerate() {
         if vi == 1 {
             continue; // Ink's notes reshuffle after a shake; the level alone says little

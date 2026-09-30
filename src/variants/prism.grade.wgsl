@@ -32,10 +32,11 @@ fn prism_pearl(thickness: f32, veil: f32) -> vec3f {
   return c;
 }
 
-// The glint: light entering glass splits by wavelength. A hairline cross, no longer than a thumb-nail,
+// The glint: light entering glass splits by wavelength. It belongs to the resting point alone
+// (axiom_still), and dissolves as a loop is born. A hairline cross, no longer than a thumb-nail,
 // leaves the middle of the frame, where the resting point sits, white at the core and then blue,
 // green and red one after another as the ray disperses, inside a thin spectral ring. It draws only
-// over light that is already bright, so nothing appears where nothing burns. `q` is in pixels from
+// over light that is already bright. `q` is in pixels from
 // the centre and `h` the frame height.
 fn prism_glint(q: vec2f, h: f32) -> vec3f {
   let a = abs(q);
@@ -80,6 +81,6 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let lit = smoothstep(0.1, 1.6, y1);
   // 6.67 s is exactly 150 turns of the 1000 s clock: a slow breath, well under 1 Hz
   let breath = 1.0 + 0.06 * sin(6.2831853 * time / 6.666667);
-  c += prism_glint((uv - vec2f(0.5)) / px, 1.0 / px.y) * lit * 4.6 * breath * sqrt(y1);
+  c += prism_glint((uv - vec2f(0.5)) / px, 1.0 / px.y) * lit * 4.6 * breath * sqrt(y1) * axiom_still();
   return max(c, vec3f(0.0));
 }

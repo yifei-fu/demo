@@ -4,7 +4,7 @@ _One law, every world between stillness and chaos._
 
 [![CI](https://github.com/yifei-fu/demo/actions/workflows/ci.yml/badge.svg)](https://github.com/yifei-fu/demo/actions/workflows/ci.yml)
 
-**Live: <https://yifei-fu.github.io/demo/>** (best on a phone)
+**Live: <https://yifei-fu.github.io/demo/>** (made for a phone)
 
 A single 3D dynamical system `ẋ = F(x; μ)` lives in your hand. About a million particles flow
 through it continuously. The parameter `μ` lives on a unit disk, and you roll a bead across that
@@ -19,9 +19,19 @@ laws blend continuously. What you see is the attractor, and its dimension is wha
   Halvorsen anchors sit on the rim and are blended as a homotopy of vector fields.
 
 There is no timeline. Changing the law makes the cloud flow into the new attractor, so the
-transitions are the dynamics. You also hear the attractor: the same law is integrated at audio
-rate and tuned to just-intonation harmonics. After about 20 s without input an idle autopilot
-drifts the bead, and any touch takes over instantly.
+transitions are the dynamics. After about 20 s without input an idle autopilot drifts the bead,
+and any touch takes over instantly.
+
+## Experience it
+
+- **Phone, portrait, in your hand.** Tap Begin: the pose you hold at that moment is the reference,
+  and Safari asks once for motion access. Tilt to change the law; level means stay.
+- **Sensors.** Tilt moves the bead, turning your body orbits the attractor, a hold dives into the
+  cloud, a shake scatters it and lets the attractor pull it back.
+- **Headphones.** You hear the attractor: the same law is integrated at audio rate and tuned to
+  just-intonation harmonics. A fixed point is silence, a Hopf bifurcation a tone that swells into
+  existence, a cycle a pitched timbre, a torus beating, chaos breathing noise. The mute button is
+  top right.
 
 ## Controls
 
@@ -36,18 +46,25 @@ drifts the bead, and any touch takes over instantly.
 
 ## Variants
 
-The same law, navigation and gestures in different art directions. They differ in light, colour,
+The same law, navigation and gestures in three art directions. They differ in light, colour,
 finish and sound. Pick one on the start screen, or with the `?v=<id>` switch, for example
-`https://yifei-fu.github.io/demo/?v=flame`.
+`https://yifei-fu.github.io/demo/?v=ink`.
 
-- `origin` (default): one light
-- `flame`: the heat of chaos
-- `ink`: one breath of ink
-- `prism`: light, split by glass
-- `abyss`: lit from within
+- **Prism** (default, `?v=prism`): light, split by glass. Thin-film iridescence on a cool black,
+  pastel spectra shifting along the filaments. Sound: FM glass on D (73.4 Hz).
+- **Ink** (`?v=ink`): one breath of ink. Sumi ink on warm washi, the one light variant: filaments
+  absorb, and the only colour is the seal. Sound: a pluck whenever a probe crosses its section, on
+  C (65.4 Hz).
+- **Flame** (`?v=flame`): the heat of chaos. Slow light smoulders in oxblood and speed ignites it to
+  white-gold. Sound: classic tones on A (55 Hz).
 
-To add one, create `src/variants/<id>.ts` exporting `variant` (see `src/variants/types.ts`); the
-registry finds it by file. Then add a line to this list.
+Other URL flags: `?seed=` (anchor placement and palette phase), `?n=` (particle count), `?perf`
+(frame-time overlay with GPU timings, for testing on a real phone), `?debug`, `?clean` (no HUD),
+`?skipintro`, `?capture` (deterministic, frames advance only via `__axiom.step`), and
+`?mapn=` / `?mapsteps=` for the parameter map's resolution and speed.
+
+To add a variant, create `src/variants/<id>.ts` with its two WGSL files, exporting `variant` (see
+`src/variants/types.ts`); the registry finds it by file. Then update this list.
 
 ## Browser support
 
@@ -83,7 +100,7 @@ src/
   map.ts, map-dom.ts   Lyapunov / D_KY parameter map and the lens
   audio.ts, audio-worklet.ts, sound.ts   the attractor as sound
   hud.ts, readout.ts, style.css   start gate, readout, fallback poster
-  variants/        one file (+ two WGSL functions) per art direction
+  variants/        Prism, Ink, Flame: one file and two WGSL functions each
 crates/axiom-core/ the law, Lyapunov spectrum and synth (Rust, cdylib → axiom.wasm)
 scripts/           build-wasm.sh, shots.mjs (visual QA)
 docs/DESIGN.md     the design contract
@@ -109,13 +126,13 @@ Requires Node 22 and a Rust toolchain with the `wasm32-unknown-unknown` target.
 exits non-zero on any console error, page error, failed request or failed check.
 
 ```sh
-npm run shots -- --mode grid --n 32768 --frames 60   # 3×3 bead positions × 2 cameras
-npm run shots -- --mode sweep                        # continuity: Δ between neighbouring frames
-npm run shots -- --mode sensors                      # deviceorientation, devicemotion, touch
-npm run shots -- --mode gate                         # start gate and no-WebGPU fallback
-npm run shots -- --mode variants --v origin,flame    # matrix: variants × 6 spots on the disk
-npm run shots -- --mode hero --v origin              # 4 clean 430×932 @2x stills and a 4-up (slow)
-npm run shots -- --mode film --v origin              # silent clip of a scripted journey (very slow)
+npm run shots -- --mode grid --n 32768 --frames 60      # 3×3 bead positions × 2 cameras
+npm run shots -- --mode sweep                           # continuity: Δ between neighbouring frames
+npm run shots -- --mode sensors                         # deviceorientation, devicemotion, touch
+npm run shots -- --mode gate                            # start gate and no-WebGPU fallback
+npm run shots -- --mode variants --v prism,ink,flame    # matrix: variants × 6 spots on the disk
+npm run shots -- --mode hero --v prism                  # 4 clean 430×932 @2x stills and a 4-up (slow)
+npm run shots -- --mode film --v prism                  # silent clip of a scripted journey (very slow)
 # options: --desktop  --v <ids>  --n  --seed  --frames  --out  --port  --duration  --fps
 #          --query "k=v&k=v" (extra URL params, e.g. mapn=32)  --url <already-running server>
 ```
@@ -125,9 +142,6 @@ and back, while the camera orbits slowly: 12 s at 30 fps by default (`--duration
 screenshot per frame at 430×932 @1.5x, encoded to `<id>_film.webm` (VP8, under about 6 MB) plus a
 poster PNG. It uses the ffmpeg that ships with Playwright, or the one in `$FFMPEG` / `PATH`. On a
 software GPU it takes many minutes per clip, so try `--duration 3 --n 32768` first.
-
-URL flags for manual testing: `?seed=` `?v=` `?n=` `?debug` `?skipintro` `?capture` (plus `?mapn=`
-and `?mapsteps=` for the parameter map's resolution and speed).
 
 ## Deploy
 

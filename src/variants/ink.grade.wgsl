@@ -6,6 +6,7 @@
 const INK_PAPER: vec3f = vec3f(0.863, 0.815, 0.738);    // #efe9df in linear light
 const INK_BLACK: vec3f = vec3f(0.0034, 0.0044, 0.0088); // dense sumi: cool, never quite neutral
 const INK_K: f32 = 3.7;
+const INK_SEAL_T: vec3f = vec3f(0.67, 0.050, 0.036);    // #c8372d over paper: what vermilion lets through
 const INK_GAMMA: f32 = 0.68;   // < 1 opens up the thin washes; dense ink still saturates to black
 
 // ------------------------------------------------------------------ paper
@@ -51,6 +52,35 @@ fn ink_fibres(p: vec2f) -> f32 {
   return ink_fibre_layer(p, 23.0, 1) + 0.8 * ink_fibre_layer(p + 40.0, 37.0, 2) + 0.6 * ink_fibre_layer(p + 90.0, 15.0, 3);
 }
 
+// ------------------------------------------------------------------ hanko
+// The artist's seal, stamped in the paper's lower-right margin: a rounded square of vermilion with an
+// axis, a base line and a drop carved out of it. Tiny, static, and a little uneven, like a real
+// stamp. p is in frame-height units (852 per frame height).
+fn ink_seal(p: vec2f, aspect: f32) -> f32 {
+  let c = vec2f(aspect * 852.0 - 56.0, 852.0 - 50.0);
+  let ca = cos(0.06);
+  let sa = sin(0.06);
+  let r = p - c;
+  if (dot(r, r) > 900.0) { return 0.0; }  // beyond ~30 px nothing to stamp
+  let q = vec2f(ca * r.x + sa * r.y, -sa * r.x + ca * r.y) / 13.0;  // the seal spans -1..1
+  let e = ink_vnoise(p * 0.55) - 0.5;
+  // the field: a rounded square whose edge is eaten a little by the paper's tooth
+  let dq = length(max(abs(q) - vec2f(0.78), vec2f(0.0))) - 0.22;
+  let field = 1.0 - smoothstep(-0.02 + 0.10 * e, 0.06 + 0.10 * e, dq);
+  // the carving is 由, "origin": a stroke through a box with a bar inside it
+  let stem = max(abs(q.x) - 0.065, abs(q.y + 0.22) - 0.44);
+  let box_l = max(abs(q.x + 0.46) - 0.065, abs(q.y - 0.26) - 0.36);
+  let box_r = max(abs(q.x - 0.46) - 0.065, abs(q.y - 0.26) - 0.36);
+  let box_b = max(abs(q.x) - 0.52, abs(q.y - 0.56) - 0.065);
+  let box_t = max(abs(q.x) - 0.52, abs(q.y + 0.10) - 0.065);
+  let bar = max(abs(q.x) - 0.46, abs(q.y - 0.22) - 0.055);
+  let glyph = min(min(min(stem, box_l), min(box_r, box_b)), min(box_t, bar));
+  let carve = 1.0 - smoothstep(-0.02, 0.05, glyph);
+  // uneven pressure: the stamp takes more colour in some places
+  let press = 0.80 + 0.20 * ink_vnoise(p * 0.21 + 11.0);
+  return field * (1.0 - carve) * press;
+}
+
 // ------------------------------------------------------------------ grade
 fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // frame-height units, so the paper keeps its scale whatever the resolution scale is
@@ -68,6 +98,8 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   paper *= vec3f(1.0 + 0.010 * wash, 1.0, 1.0 - 0.014 * wash);
   paper *= 1.0 - 0.020 * (grainy - 0.5) + 0.030 * fibres;
   paper *= 1.0 - 0.050 * smoothstep(0.35, 1.05, r2);
+  // the seal is stamped on the paper, under whatever ink later passes over it
+  paper = mix(paper, paper * INK_SEAL_T, 0.82 * ink_seal(p, aspect));
 
   // ink: absorption per channel. The load's own hue survives (warm wash, cool dense ink); a thin
   // wash feels the paper's tooth, so a quick stroke dries into fibres instead of fading smoothly.

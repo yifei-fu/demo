@@ -55,8 +55,9 @@ fn render_and_control_paths_do_not_allocate() {
         synth.set(1, 1.0);
         synth.set(2, 0.5);
         synth.set(3, 1.0);
-        // Every preset, switched between mid-stream.
-        for preset in [0.0, 1.0, 2.0, 3.0, 1.0, 0.0] {
+        // Every shipped preset, switched between mid-stream (and the retired
+        // id 3, which now selects preset 0).
+        for preset in [0.0, 1.0, 2.0, 1.0, 3.0, 2.0, 0.0] {
             synth.set(4, preset);
             for _ in 0..300 {
                 synth.render(128);

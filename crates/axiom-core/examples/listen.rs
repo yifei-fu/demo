@@ -8,7 +8,9 @@
 //! λ1 / D come from the live `Spectrum` tracker exactly as the app sends them.
 //! Every preset is rendered twice (with and without the stir and shake events)
 //! at 48 kHz in 128-frame quanta; the events render is written to
-//! `<out_dir>/<name>.wav` (16-bit stereo) and the tables below are printed.
+//! `<out_dir>/<name>.wav` (16-bit stereo, TPDF dither) and, low-passed at
+//! 15 kHz by a Kaiser-windowed sinc, to `<out_dir>/<name>-32k.wav` (32 kHz).
+//! The tables below are printed.
 //!
 //! Per segment: RMS (dB), the level above 200 Hz, peak, spectral centroid, the
 //! shares of energy below 200 Hz and above 4 kHz; then the steepest level rise
@@ -20,6 +22,7 @@
 //! prints Ink's notes per second.
 
 use axiom_core::law::{write_params, PARAMS_LEN};
+use axiom_core::rng::Rng;
 use axiom_core::spectrum::Spectrum;
 use axiom_core::synth::Synth;
 use std::f64::consts::PI;
@@ -45,14 +48,10 @@ const SEGS: [(&str, f64, f64); 10] = [
     ("tail", 23.0, 24.5),
 ];
 
-/// (file name, preset id, root Hz)
-const PRESETS: [(&str, u32, f32); 5] = [
-    ("default", 0, 55.0),
-    ("ink", 1, 65.4),
-    ("prism", 2, 73.4),
-    ("abyss", 3, 41.2),
-    ("default-origin-110", 0, 110.0),
-];
+/// (file name, preset id, root Hz): the three shipped voices.
+const PRESETS: [(&str, u32, f32); 3] = [("prism", 2, 73.4), ("ink", 1, 65.4), ("flame", 0, 55.0)];
+/// The voice the others' loudness is compared with.
+const REFERENCE: &str = "flame";
 
 fn ease(x: f64) -> f64 {
     let x = x.clamp(0.0, 1.0);
@@ -378,8 +377,9 @@ fn max_jump(series: &[f64], win: f64) -> (f64, f64) {
     best
 }
 
-fn write_wav(path: &str, a: &Audio) -> std::io::Result<()> {
-    let n = a.l.len();
+/// 16-bit stereo WAV at `rate` Hz, with TPDF dither (deterministic).
+fn write_wav(path: &str, l: &[f32], r: &[f32], rate: usize) -> std::io::Result<()> {
+    let n = l.len();
     let mut buf = Vec::with_capacity(44 + 4 * n);
     let u32le = |v: u32| v.to_le_bytes();
     buf.extend_from_slice(b"RIFF");
@@ -387,18 +387,85 @@ fn write_wav(path: &str, a: &Audio) -> std::io::Result<()> {
     buf.extend_from_slice(b"WAVEfmt ");
     buf.extend_from_slice(&u32le(16));
     buf.extend_from_slice(&[1, 0, 2, 0]);
-    buf.extend_from_slice(&u32le(SR as u32));
-    buf.extend_from_slice(&u32le(SR as u32 * 4));
+    buf.extend_from_slice(&u32le(rate as u32));
+    buf.extend_from_slice(&u32le(rate as u32 * 4));
     buf.extend_from_slice(&[4, 0, 16, 0]);
     buf.extend_from_slice(b"data");
     buf.extend_from_slice(&u32le(4 * n as u32));
+    let mut rng = Rng::new(9, 9);
     for i in 0..n {
-        for v in [a.l[i], a.r[i]] {
-            let s = (f64::from(v) * 32767.0).round().clamp(-32768.0, 32767.0) as i16;
+        for v in [l[i], r[i]] {
+            let dither = (rng.f64() - rng.f64()) / 32768.0;
+            let s = ((f64::from(v) + dither) * 32767.0)
+                .round()
+                .clamp(-32768.0, 32767.0) as i16;
             buf.extend_from_slice(&s.to_le_bytes());
         }
     }
     std::fs::File::create(path)?.write_all(&buf)
+}
+
+/// Zeroth-order modified Bessel function (Kaiser window).
+fn bessel_i0(x: f64) -> f64 {
+    let (mut sum, mut term) = (1.0, 1.0);
+    for k in 1..40 {
+        term *= (x / (2.0 * k as f64)).powi(2);
+        sum += term;
+    }
+    sum
+}
+
+/// Rational-ratio sample-rate conversion by a Kaiser-windowed sinc (β = 8,
+/// 256 taps at the input rate) low-passed at `cutoff` Hz. Output sample `j`
+/// sits at input time `j·from/to`; there are only `to/gcd` distinct
+/// fractional offsets, so each kernel is computed once.
+fn resample(x: &[f32], from: usize, to: usize, cutoff: f64) -> Vec<f32> {
+    const HALF: usize = 128;
+    const BETA: f64 = 8.0;
+    let gcd = |mut a: usize, mut b: usize| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    let g = gcd(from, to);
+    let (p, q) = (from / g, to / g);
+    let fc = cutoff / from as f64;
+    let norm = bessel_i0(BETA);
+    let kernels: Vec<Vec<f64>> = (0..q)
+        .map(|phase| {
+            let frac = phase as f64 / q as f64;
+            (0..2 * HALF)
+                .map(|t| {
+                    let d = t as f64 - (HALF as f64 - 1.0) - frac;
+                    let u = d / HALF as f64;
+                    if u.abs() >= 1.0 {
+                        return 0.0;
+                    }
+                    let sinc = if d == 0.0 {
+                        2.0 * fc
+                    } else {
+                        (2.0 * PI * fc * d).sin() / (PI * d)
+                    };
+                    sinc * bessel_i0(BETA * (1.0 - u * u).sqrt()) / norm
+                })
+                .collect()
+        })
+        .collect();
+    let out_len = x.len() * to / from;
+    (0..out_len)
+        .map(|j| {
+            let (base, phase) = ((j * p) / q, (j * p) % q);
+            let mut acc = 0.0;
+            for (t, k) in kernels[phase].iter().enumerate() {
+                let i = base as isize - (HALF as isize - 1) + t as isize;
+                if i >= 0 && (i as usize) < x.len() {
+                    acc += f64::from(x[i as usize]) * k;
+                }
+            }
+            acc as f32
+        })
+        .collect()
 }
 
 fn main() {
@@ -509,7 +576,12 @@ fn main() {
         let line: Vec<String> = delta.iter().map(|d| format!("{d:.0}")).collect();
         println!("shake delta per 100 ms: {}", line.join(" "));
         if let Some(dir) = &out_dir {
-            write_wav(&format!("{dir}/{name}.wav"), &events).expect("write wav");
+            write_wav(&format!("{dir}/{name}.wav"), &events.l, &events.r, SR).expect("write wav");
+            let (l, r) = (
+                resample(&events.l, SR, 32_000, 15_000.0),
+                resample(&events.r, SR, 32_000, 15_000.0),
+            );
+            write_wav(&format!("{dir}/{name}-32k.wav"), &l, &r, 32_000).expect("write wav");
         }
         summary.push((
             name,
@@ -517,10 +589,10 @@ fn main() {
             rows.iter().map(|r| (1.0 - r.lf) * 100.0).collect(),
         ));
     }
-    println!("\n== loudness relative to default (dB) and share of energy above 200 Hz (%)");
+    println!("\n== loudness relative to {REFERENCE} (dB) and share of energy above 200 Hz (%)");
     let reference = summary
         .iter()
-        .find(|s| s.0 == "default")
+        .find(|s| s.0 == REFERENCE)
         .map(|s| s.1.clone());
     for (name, db, hi) in &summary {
         let rel: Vec<String> = (1..9)

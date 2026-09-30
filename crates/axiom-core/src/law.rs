@@ -1,5 +1,23 @@
 //! The law: seeded anchor placement, blending weights, the `LawParams` block
 //! (DESIGN.md §3.3) and the world field it defines (§3.2).
+//!
+//! A point (u, v) of the parameter disk has polar coordinates (r, θ). The four
+//! anchors sit on the rim in a seeded cyclic order; at angle θ only the two
+//! neighbours of the arc it falls in are active, mixed by a smootherstep weight
+//! that is flat near each anchor and only crosses over in the middle quarter
+//! of the arc. Each active anchor `s` lives in its own coordinates
+//! `x_s = c_s + L_s R_s x` (`R_s` a seeded, damped-toward-upright rotation), so
+//! the world field on `|x| ≲ 1` is
+//!
+//! ```text
+//! F(x) = Σ_s w_s (τ_s / L_s) R_sᵀ F_kind(c_s + L_s R_s x)  −  κ(r) x  −  K max(0, |x| − R_c)² x̂
+//! ```
+//!
+//! with everything but `x` read from the route tables at radius `r`. The
+//! damping `κ(r)` is what makes the centre a stable fixed point for every
+//! blend, and the last term is a soft wall at `R_c = 1.2` that keeps orbits
+//! bounded. The GPU, the audio probes and the spectrum tracker all integrate
+//! exactly this field from the same 68-float block.
 
 use crate::anchors::{self, dot, System, KIND_COUNT, M3, V3};
 use crate::rng::Rng;

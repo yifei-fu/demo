@@ -1,4 +1,20 @@
-//! AXIOM core: the law, its Lyapunov spectrum and the sound of the attractor.
+//! AXIOM core: one law of motion, its Lyapunov spectrum, and the sound of the
+//! attractor. Everything the piece shows or plays comes from a single vector
+//! field on a disk of parameters.
+//!
+//! * [`anchors`]: four chaotic systems (Thomas, Aizawa, Lorenz, Rössler; a
+//!   fifth, Halvorsen, is implemented but has no route), each with an analytic
+//!   Jacobian.
+//! * [`tables`] and [`law`]: the *routes* (how each anchor's parameters change
+//!   from a calm fixed point at the centre of the disk to its chaotic classic
+//!   values on the rim) and the *world field* that blends the two anchors
+//!   nearest to the bead, damps the centre and confines the orbits. The
+//!   `LawParams` block that carries all this to the GPU is built here.
+//! * [`spectrum`]: Benettin's algorithm for the Lyapunov exponents of the
+//!   current law, the Kaplan–Yorke dimension and the regime label.
+//! * [`synth`]: six probes integrate the same field at audio rate and are
+//!   turned into sound (the drone, wind and reverb sit under them); [`reverb`]
+//!   and [`rng`] are its small dependencies.
 //!
 //! The safe Rust API lives in the modules; this file is only the C ABI of
 //! DESIGN.md §4. Pointers cross the boundary as `u32` offsets into linear

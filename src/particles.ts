@@ -9,7 +9,7 @@ import type { Variant } from './variants/types';
 
 const WORKGROUP = 64;
 const MAX_GROUPS_X = 65535;
-const FRAME_FLOATS = 52; // 13 vec4
+const FRAME_FLOATS = 56; // 14 vec4
 const FLAG_INIT = 1;
 const FLAG_SPLAT = 2;
 const SHAKE_DECAY = 3.2; // 1/s
@@ -21,7 +21,7 @@ const MAX_SUBSTEPS = 4;
 /** About this many particles feed the extent measurement each frame. */
 const EXTENT_SAMPLES = 2048;
 /** The least a slow particle may weigh next to a typical one (dwell equalisation). */
-const DWELL_FLOOR = 0.03;
+const DWELL_FLOOR = 0.004;
 const TAN_HALF = 0.31;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
@@ -73,8 +73,9 @@ export class Particles {
   equalise = 0;
   radius = 0.8;
   depthCue = 0;
-  /** Share of respawns that copy a settled particle (volume-filling attractors). */
-  cloneShare = 0;
+  /** Eased Kaplan-Yorke dimension and still-point flag, for the variant's axiom_dky / axiom_still. */
+  liveDky = 0;
+  liveStill = 1;
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;
@@ -193,11 +194,12 @@ export class Particles {
     const probe = this.extent.probe;
     vec4(f, 40, probe[0], probe[1], probe[2], this.radius);
     vec4(f, 44, this.refSpeed, this.equalise, DWELL_FLOOR, this.depthCue);
+    vec4(f, 48, this.liveDky, this.liveStill, 0, 0);
     const u = this.u32;
-    u[48] = p.frame >>> 0;
-    u[49] = this.count;
-    u[50] = this.seed;
-    u[51] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
+    u[52] = p.frame >>> 0;
+    u[53] = this.count;
+    u[54] = this.seed;
+    u[55] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);

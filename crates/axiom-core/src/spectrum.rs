@@ -1,5 +1,24 @@
 //! Lyapunov spectrum (Benettin, 3 tangent vectors, modified Gram–Schmidt),
 //! Kaplan–Yorke dimension and the regime code — DESIGN.md §3.4.
+//!
+//! **Benettin.** A tracer `x` and three tangent vectors are integrated
+//! together, `ẋ = F(x)`, `q̇ᵢ = J(x) qᵢ`. Every 0.05 time units the frame is
+//! re-orthonormalised by modified Gram–Schmidt and the log stretch of each
+//! vector, `ln‖qᵢ‖ / Δt`, is the growth rate of that direction over the
+//! interval. Their exponentially forgotten averages are the Lyapunov exponents
+//! λ₁ ≥ λ₂ ≥ λ₃ of the *current* law (memory ≈ 10 time units for the reported
+//! λ so it follows navigation; 40 for the dimension and regime so the label is
+//! steady).
+//!
+//! **Kaplan–Yorke.** `D = j + (λ₁ + … + λⱼ) / |λⱼ₊₁|`, `j` the largest count
+//! whose partial sum is non-negative. Exponents within ε of zero are snapped
+//! to 0, so a limit cycle (0, −, −) reads exactly 1, a torus (0, 0, −) exactly 2
+//! and chaos lies in between 2 and 3.
+//!
+//! **Regime.** λ₁ < −ε is a fixed point; |λ₁| ≤ ε a cycle (λ₂ < −ε) or a
+//! torus; λ₁ > ε strange chaos (D < 2.7) or, when it fills volume (D ≥ 2.7),
+//! a labyrinth. A tracer that has actually stopped is a fixed point whatever
+//! its finite-time exponents still remember.
 
 use crate::anchors::{dot, mat_vec, norm, System, M3, V3};
 use crate::law::Law;

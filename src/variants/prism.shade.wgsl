@@ -75,6 +75,8 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   c *= mix(vec3f(1.0), vec3f(0.93, 1.09, 0.88), smoothstep(0.0, 0.3, s) * (1.0 - 0.8 * defocus));
   // the haze of newcomers spans the whole spectrum, whose mean leans blue: warm it back to cream
   c *= mix(vec3f(1.0), vec3f(1.0, 1.08, 0.88), fresh);
+  // at the resting point the streams are the whole show: let the falling hairlines burn brighter
+  c *= 1.0 + 0.9 * axiom_still() * fresh;
   // glitter: a few grains catch the light
   let glint = 1.0 + 0.45 * smoothstep(0.985, 1.0, phase);
   // defocused near light spreads thin, so it is lifted to keep its bokeh disc visible

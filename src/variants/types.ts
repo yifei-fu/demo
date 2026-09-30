@@ -8,7 +8,7 @@
  *     src/variants/<id>.grade.wgsl    the finish function
  *
  * Everything else (integration, splatting, density curve, trails, bloom, tonemap, HDR output)
- * belongs to the engine and is shared. See `origin.ts` for a complete example.
+ * belongs to the engine and is shared. See `prism.ts` for a complete example.
  *
  * ## `shadeWgsl`: particle colour, run once per particle per frame inside the compute kernel
  *
@@ -17,7 +17,7 @@
  * - `speed`  world units per second of the particle's velocity, including stir and shake.
  *            On an attractor it is roughly 0.1 - 1.5 (fast laws median ~0.7, slow ones ~0.15); a
  *            stirred or shaken particle can reach 4 or more. It makes filaments change hue along
- *            their length. A log scale suits it: origin uses log2(speed / 0.08) / 5.2.
+ *            their length. A log scale suits it: log2(speed / 0.08) / 5.2 spans the whole range.
  * - `phase`  per-particle random in [0, 1), fixed for the particle's life (redrawn on respawn).
  *            Independent of position, so it can carry hue jitter or a second colour family.
  * - `depth`  signed distance from the focal plane in world units: negative = nearer the camera.
@@ -34,7 +34,8 @@
  * rely on newcomers all wearing the colour it returns for 0.45 (choose that colour deliberately:
  * it is the hue of the faint inward streams). The engine also weights particles by dwell
  * (slow ones count less on an extended attractor), which `shade` cannot see or affect.
- * Only the four arguments are in scope. Pure functions of them keep the frame deterministic.
+ * Only the four arguments are in scope, plus the two live readings below. Pure functions of them
+ * keep the frame deterministic.
  *
  * ## `gradeWgsl`: the finish, run once per pixel in the composite pass
  *
@@ -43,7 +44,7 @@
  * - `hdr`   linear scene-referred light, with exposure, bloom, chromatic aberration and vignette
  *           already applied and no background. Zero where nothing is drawn. Unbounded: filaments
  *           sit around 0.05 - 3, a point-like core can reach 50 or more.
- * - `uv`    0..1 across the frame, origin top-left, not aspect-corrected.
+ * - `uv`    0..1 across the frame, top-left origin, not aspect-corrected.
  * - `time`  seconds of simulation time, wrapping at 1000.
  * - returns depends on `render.finish`:
  *   - `'agx'` (default): scene-referred linear RGB on the same scale as `hdr`. The engine then adds
@@ -62,9 +63,17 @@
  *     brighter than paper white, so a direct look opts into HDR highlights by exceeding 1 and is
  *     otherwise unaffected by the headroom. The output is clamped to [0, headroom].
  *
- * Besides its arguments, `grade` may call `axiom_headroom() -> f32`: the display headroom relative
- * to SDR white (1.0 on SDR, about 1.7 on an HDR display), e.g. to let a highlight exceed 1 only
- * where the display can show it. Helper functions must have variant-specific names.
+ * ## Live readings, callable in both `shade()` and `grade()`
+ *
+ *     fn axiom_dky() -> f32     the Kaplan-Yorke dimension of the current law, 0 - 3
+ *     fn axiom_still() -> f32   1 while the law is a stable fixed point (the star), else 0
+ *
+ * Both are eased over about half a second, so they can drive colour or finish without popping.
+ * They are how a variant gates a regime-specific touch: a glint only on the still point
+ * (`axiom_still()`), clarity or a cooler cast only in volume-filling chaos (`axiom_dky()` above
+ * about 2.4). `grade` may also call `axiom_headroom() -> f32`: the display headroom relative to
+ * SDR white (1.0 on SDR, about 1.7 on an HDR display), e.g. to let a highlight exceed 1 only where
+ * the display can show it. Helper functions must have variant-specific names.
  *
  * ## Light variants
  *
@@ -77,7 +86,7 @@ export type VariantFinish = 'agx' | 'direct';
 export type HudTheme = 'dark' | 'light';
 
 export interface VariantRender {
-  /** Scene-referred gain before the finish. origin uses 5. */
+  /** Scene-referred gain before the finish. Typical values are 3 - 6. */
   exposure: number;
   /** Trail persistence 0..0.95: weight of the previous frame in the running average. */
   trail: number;
@@ -85,7 +94,7 @@ export interface VariantRender {
   dof: number;
   /**
    * Bloom amount. Only light brighter than the engine's threshold feeds it (a point-like core, a
-   * dense bright sheet), so useful values are large: origin uses 12; 0 disables bloom.
+   * dense bright sheet), so useful values are large (5 - 12); 0 disables bloom.
    */
   bloom: number;
   /** Film grain amplitude in display units; ~0.01 is barely visible. */
@@ -108,7 +117,7 @@ export interface VariantRender {
 
 export interface Variant {
   id: string;
-  /** Position in the start screen's row of variants and the default choice: origin is 0. */
+  /** Position in the start screen's row of variants; the lowest is the default. */
   order: number;
   /** Short display name, shown in the start screen's row of variants. */
   name: string;
@@ -116,7 +125,7 @@ export interface Variant {
   shadeWgsl: string;
   gradeWgsl: string;
   render: VariantRender;
-  /** Preset ids: 0 default, 1 ink, 2 prism, 3 abyss. */
+  /** Preset ids: 0 default, 1 ink, 2 prism. */
   sound: { preset: number; rootHz: number };
   /** `accent`: CSS colour for HUD and map accents. `theme`: colours of text and lines. */
   hud: { accent: string; theme: HudTheme };

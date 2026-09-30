@@ -30,6 +30,9 @@ export interface PostSettings {
   dive: number;
   /** Density lift for a magnified view (diving, or a camera pulled back). */
   zoom: number;
+  /** Eased Kaplan-Yorke dimension and still-point flag (axiom_dky / axiom_still). */
+  dky: number;
+  still: number;
 }
 
 /** Per-frame finish settings for a variant. The engine adds breath and dimming on top. */
@@ -47,6 +50,8 @@ export function settingsFor(v: Variant): PostSettings {
     bloomTint: r.bloomTint ?? [1, 1, 1],
     dive: 0,
     zoom: 1,
+    dky: 0,
+    still: 1,
   };
 }
 
@@ -260,7 +265,7 @@ export class Post {
     // zoom: diving spreads the same light over more pixels; lift the density so it stays lit
     d.set([(s.zoom * this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
     d.set(this.background, 16);
-    d.set([s.clarity, s.dive, 0, 0], 20);
+    d.set([s.clarity, s.dive, s.dky, s.still], 20);
     d.set(s.bloomTint, 24);
     this.device.queue.writeBuffer(this.params, 0, d);
 

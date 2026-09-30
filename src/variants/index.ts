@@ -1,6 +1,6 @@
 /**
  * Registry of shipped variants, discovered by file: every `src/variants/<id>.ts` that exports
- * `variant: Variant` is registered, ordered by `variant.order` (origin = 0, the default).
+ * `variant: Variant` is registered, ordered by `variant.order` (the lowest is the default).
  * Adding a variant needs no edit here.
  */
 import type { Variant } from './types';

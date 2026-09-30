@@ -655,18 +655,19 @@ fn stir_and_shake_make_themselves_heard() {
 
 // -------------------------------------------------------------- presets ---
 
-const PRESET_NAMES: [&str; 4] = ["classic", "ink", "prism", "abyss"];
+const PRESET_NAMES: [&str; 3] = ["classic", "ink", "prism"];
 
-/// Largest sample-to-sample step of the next `secs`.
+/// Largest sample-to-sample step of the next `secs` (the first frame only
+/// seeds the comparison: it is not a step from silence).
 fn max_step(s: &mut Synth, secs: f32) -> f32 {
-    let mut prev = [0.0f32; 2];
+    let mut prev: Option<[f32; 2]> = None;
     let mut worst = 0.0f32;
     for _ in 0..(secs * SR / 128.0) as usize {
         for f in s.render(128).chunks(2) {
-            worst = worst
-                .max((f[0] - prev[0]).abs())
-                .max((f[1] - prev[1]).abs());
-            prev = [f[0], f[1]];
+            if let Some(p) = prev {
+                worst = worst.max((f[0] - p[0]).abs()).max((f[1] - p[1]).abs());
+            }
+            prev = Some([f[0], f[1]]);
         }
     }
     worst
@@ -706,17 +707,22 @@ fn every_preset_is_finite_and_bounded_with_every_event() {
             assert!(peak <= 0.9 + 1e-6, "{name} at ({u},{v}): peak {peak}");
         }
     }
-    // Unknown ids fall back to the classic voice.
-    let mut s = Synth::new(SR, 1);
-    s.set(4, 9.0);
-    assert_eq!(s.preset(), axiom_core::synth::Preset::Classic);
+    // Unknown ids (and the retired preset 3) fall back to the classic voice,
+    // whatever was playing.
+    for id in [3.0, 9.0, -1.0] {
+        let mut s = Synth::new(SR, 1);
+        s.set(4, 2.0);
+        assert_eq!(s.preset(), axiom_core::synth::Preset::Prism);
+        s.set(4, id);
+        assert_eq!(s.preset(), axiom_core::synth::Preset::Classic, "id {id}");
+    }
 }
 
 #[test]
 fn switching_presets_does_not_click() {
     // Continuous voices only: Ink's plucks have a sharp attack by design.
     let seed = 6;
-    for (from, to) in [(0, 2), (2, 3), (3, 0), (0, 3), (2, 0)] {
+    for (from, to) in [(0, 2), (2, 0)] {
         let mut s = Synth::new(SR, seed);
         s.set(0, 1.0);
         s.set(4, from as f32);
@@ -799,8 +805,8 @@ fn ink_plays_the_poincare_section() {
 
 #[test]
 fn presets_have_their_own_rooms() {
-    // Ink is dry (short tail), Abyss rings on: after the input stops, the
-    // reverb tail of Abyss must outlast Ink's by a wide margin.
+    // Ink is dry (short tail), Prism rings on: after the input stops, the
+    // reverb tail of Prism must outlast Ink's by a wide margin.
     let seed = 2;
     let tail = |preset: f32| {
         let mut s = Synth::new(SR, seed);
@@ -814,9 +820,9 @@ fn presets_have_their_own_rooms() {
         rms_of(&mut s, 1.0)
     };
     assert!(
-        tail(3.0) > 2.0 * tail(1.0),
-        "abyss {} ink {}",
-        tail(3.0),
+        tail(2.0) > 2.0 * tail(1.0),
+        "prism {} ink {}",
+        tail(2.0),
         tail(1.0)
     );
 }

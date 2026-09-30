@@ -15,6 +15,8 @@ const POINT_FULL = 0.22;
 const TAU_SIZE = 2;
 const TAU_CENTER = 3;
 const TAU_EQUALISE = 0.8;
+/** Easing of the readings variants may sample (axiom_dky, axiom_still). */
+const TAU_LIVE = 0.5;
 /** Slowest reference speed (world units / s) dwell equalisation will use. */
 const REF_SPEED_MIN = 0.15;
 /** Largest change of ln(distance) per second. */
@@ -39,6 +41,9 @@ export class Framing {
   equalise = 0;
   /** How volume-filling the attractor is, 0..1 (from its Kaplan-Yorke dimension). */
   volume = 0;
+  /** Kaplan-Yorke dimension and "stable fixed point" flag, eased for variants to sample. */
+  liveDky = 0;
+  liveStill = 1;
   private radius = 0;
   private logScale = 0;
 
@@ -50,6 +55,9 @@ export class Framing {
   update(measured: Extent | null, dky: number, regime: number, dt: number): void {
     this.volume +=
       (smoothstep(VOLUME_D0, VOLUME_D1, dky) - this.volume) * (1 - Math.exp(-dt / TAU_SIZE));
+    const kl = 1 - Math.exp(-dt / TAU_LIVE);
+    this.liveDky += (dky - this.liveDky) * kl;
+    this.liveStill += ((regime === 0 ? 1 : 0) - this.liveStill) * kl;
     if (!measured) return;
     const kc = 1 - Math.exp(-dt / TAU_CENTER);
     for (let i = 0; i < 3; i++)

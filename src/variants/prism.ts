@@ -5,7 +5,7 @@ import shadeWgsl from './prism.shade.wgsl?raw';
 /** Thin-film iridescence on a cool black: light split by glass, pastel spectra that shift along filaments. */
 export const variant: Variant = {
   id: 'prism',
-  order: 3,
+  order: 0,
   name: 'Prism',
   tagline: 'light, split by glass',
   shadeWgsl,

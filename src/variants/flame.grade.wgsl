@@ -28,10 +28,11 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let cooling = (1.0 - smoothstep(0.03, 0.40, y)) * warm;
   c *= mix(vec3f(1.0), vec3f(1.10, 0.85, 0.70), cooling);
   // an S in the mid-tones: haze recedes and threads come forward, so dark voids open between them
-  c *= mix(0.85, 1.25, smoothstep(0.03, 1.2, y));
+  let vol = smoothstep(2.3, 2.75, axiom_dky());  // volume-filling chaos: harder, darker voids
+  c *= mix(0.85 - 0.30 * vol, 1.25 + 0.25 * vol, smoothstep(0.03, 1.2, y));
 
   // heat: a lot of light leans toward gold whatever its hue, so the single point is a star
-  let heat = smoothstep(0.3, 6.0, y);
+  let heat = smoothstep(0.3 - 0.1 * vol, 6.0 - 1.5 * vol, y);
   let ember = mix(vec3f(1.0, 0.54, 0.16), vec3f(1.0, 0.70, 0.32), smoothstep(3.0, 40.0, y));
   c = mix(c, ember * y, heat * 0.7);
 

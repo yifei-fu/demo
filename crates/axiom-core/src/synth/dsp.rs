@@ -49,36 +49,23 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
     )
 }
 
-/// State-variable filter (Chamberlin form). `f` is 2·sin(π·fc/sr) ≈ 2π·fc/sr,
-/// `q` the damping (smaller = more resonant).
+/// State-variable filter (Chamberlin form), used here as a band-pass. `f` is
+/// 2·sin(π·fc/sr) ≈ 2π·fc/sr (keep it below ~1.4 for stability), `q` the
+/// damping (smaller = more resonant).
 #[derive(Default, Clone, Copy)]
 pub struct Svf {
     lo: f32,
     bp: f32,
 }
 
-/// The three outputs of an `Svf` step.
-pub struct SvfOut {
-    pub lo: f32,
-    pub bp: f32,
-}
-
 impl Svf {
-    pub fn process(&mut self, x: f32, f: f32, q: f32) -> SvfOut {
+    /// One step; returns the band-pass output.
+    pub fn bandpass(&mut self, x: f32, f: f32, q: f32) -> f32 {
         let hi = x - self.lo - q * self.bp;
         self.bp += f * hi;
         self.lo += f * self.bp;
-        SvfOut {
-            lo: self.lo,
-            bp: self.bp,
-        }
+        self.bp
     }
-}
-
-/// Second-order sections in a row need a frequency coefficient: keep it
-/// stable (f < ~1.4) whatever the caller asks for.
-pub fn svf_coeff(hz: f32, sample_rate: f32) -> f32 {
-    (TAU * hz / sample_rate).min(1.2)
 }
 
 /// Onset swell: a gain that stops a signal's level from rising faster than the

@@ -2,26 +2,31 @@
 // Visual-QA harness for AXIOM. Drives the engine through window.__axiom (docs/DESIGN.md §5),
 // writes screenshots + contact sheets, and exits 1 on any console/page error or failed check.
 //
-//   node scripts/shots.mjs [--mode grid|sweep|sensors|gate|variants|hero|film|all] [--desktop] [--v a,b]
-//        [--n 65536] [--seed 1] [--frames 180] [--query "k=v&k=v"] [--out dir]
-//        [--url base | --port 5172]
+//   node scripts/shots.mjs [--mode grid|sweep|sensors|gate|variants|hero|film|all] [--desktop]
+//        [--v prism,ink,flame] [--n 65536] [--seed 1] [--frames 180] [--query "k=v&k=v"]
+//        [--out dir] [--url base | --port 5172]
 //
 //   all      = grid, sweep, sensors, gate (any mode list may be comma-separated)
-//   variants = matrix sheet, rows = every --v id (required), columns = 7 fixed positions
+//   variants = matrix sheet, rows = every --v id (required), columns = 6 fixed spots on the disk
 //   hero     = per --v id, four clean phone stills at 430x932 @2x plus a 4-up (slow;
 //              defaults n=262144, frames=300)
 //   film     = per --v id, a silent clip of a scripted bead journey (clean, 430x932 @1.5x,
 //              n=196608); --duration 12 (s) --fps 30 --frames 120 (warm-up); encoded with the
 //              ffmpeg that ships with playwright (or $FFMPEG / PATH) into <id>_film.webm
 //
+//   Without --v the engine's default variant is used. Image and video helpers live in
+//   shots-sheets.mjs and shots-video.mjs.
+//
 // Logs go to stderr; the final JSON summary goes to stdout (and <out>/summary.json).
 
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { analyze, contactSheet, diffChart } from './shots-sheets.mjs';
+import { findEncoder, inspectVideo, startEncoder } from './shots-video.mjs';
 
 // createRequire rather than `import` so NODE_PATH can supply playwright when node_modules is absent.
 const { chromium } = createRequire(import.meta.url)('playwright');
@@ -104,6 +109,9 @@ const HERO = {
   isMobile: true,
   hasTouch: true,
 };
+// Where Playwright keeps its browsers, and the ffmpeg build it bundles for video recording.
+const BROWSERS_ROOT =
+  process.env.PLAYWRIGHT_BROWSERS_PATH ?? resolve(dirname(chromium.executablePath()), '../..');
 const REGIMES = ['fixed', 'cycle', 'torus', 'strange', 'labyrinth'];
 const STEP_TIMEOUT = 600_000;
 const log = (...m) => console.error(...m);
@@ -262,97 +270,6 @@ async function withPage(browser, base, label, v, opts, fn) {
   } finally {
     await ctx.close().catch(() => {});
   }
-}
-
-// ---- image tooling: everything runs in a scratch page, so no Node image dependencies ----------
-// For each PNG: mean luma, fraction of lit pixels, and mean |Δ| (0..255 over RGB) vs. the previous.
-async function analyze(tool, pngs) {
-  return evalT(
-    tool,
-    async (b64s) => {
-      const out = [];
-      let prev = null;
-      for (const b64 of b64s) {
-        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-        const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-        const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d', {
-          willReadFrequently: true,
-        });
-        g.drawImage(bmp, 0, 0);
-        const px = g.getImageData(0, 0, bmp.width, bmp.height).data;
-        let luma = 0,
-          lit = 0,
-          diff = 0;
-        for (let i = 0; i < px.length; i += 4) {
-          const y = 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-          luma += y;
-          if (y > 24) lit++;
-          if (prev)
-            diff +=
-              Math.abs(px[i] - prev[i]) +
-              Math.abs(px[i + 1] - prev[i + 1]) +
-              Math.abs(px[i + 2] - prev[i + 2]);
-        }
-        const n = px.length / 4;
-        out.push({ luma: luma / n / 255, lit: lit / n, diff: prev ? diff / (n * 3) : null });
-        prev = px;
-      }
-      return out;
-    },
-    pngs.map((b) => b.toString('base64')),
-    'analyze',
-  );
-}
-
-const esc = (s) =>
-  String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
-
-// cells: [{png: Buffer, label: string, flag?: bool}] laid out row-major in `cols` columns.
-// Optional `head` (column labels) and `side` (row labels) turn it into a labelled matrix.
-async function contactSheet(
-  tool,
-  file,
-  { title, cols, cells, footer = '', width = 1200, head, side },
-) {
-  const gap = 10;
-  const sideW = side ? 96 : 0;
-  const cellW = Math.floor((width - 24 - sideW - (cols - (side ? 0 : 1)) * gap) / cols);
-  const fig = (c) =>
-    `<figure class="${c.flag ? 'flag' : ''}"><img src="data:image/png;base64,${c.png.toString('base64')}"><figcaption>${esc(c.label)}</figcaption></figure>`;
-  const items = head
-    ? [...(side ? ['<div></div>'] : []), ...head.map((h) => `<div class="h">${esc(h)}</div>`)]
-    : [];
-  for (let r = 0; r * cols < cells.length; r++) {
-    if (side) items.push(`<div class="h">${esc(side[r])}</div>`);
-    items.push(...cells.slice(r * cols, (r + 1) * cols).map(fig));
-  }
-  const html = `<!doctype html><meta charset="utf-8"><style>
-    body{margin:0;padding:12px;background:#05060a;color:#9aa0b0;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace}
-    h1{margin:0 0 10px;font:600 12px/1 system-ui,sans-serif;letter-spacing:.06em;color:#dfe3ee}
-    .g{display:grid;grid-template-columns:${side ? `${sideW}px ` : ''}repeat(${cols},${cellW}px);gap:${gap}px}
-    figure{margin:0}img{display:block;width:${cellW}px;height:auto;outline:1px solid #1b1e28}
-    figcaption{padding:4px 0 0;white-space:pre}.flag figcaption{color:#ff6b5e}svg{display:block;margin-top:12px}
-    .h{white-space:pre;color:#dfe3ee;padding-top:2px}
-  </style><h1>${esc(title)}</h1><div class="g">${items.join('')}</div>${footer}`;
-  await tool.setViewportSize({ width, height: 200 });
-  await tool.setContent(html);
-  await tool.evaluate(() => Promise.all([...document.images].map((i) => i.decode())));
-  await tool.screenshot({ path: file, fullPage: true });
-  return file;
-}
-
-function diffChart(diffs, threshold, width) {
-  const h = 56;
-  const max = Math.max(...diffs, threshold * 1.1, 1e-9);
-  const bw = width / diffs.length;
-  const bars = diffs
-    .map(
-      (d, i) =>
-        `<rect x="${(i * bw + 1).toFixed(1)}" y="${(h - (h * d) / max).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${((h * d) / max).toFixed(1)}" fill="${d > threshold ? '#ff6b5e' : '#5b8def'}"/>`,
-    )
-    .join('');
-  const y = (h - (h * threshold) / max).toFixed(1);
-  return `<svg width="${width}" height="${h + 4}"><line x1="0" x2="${width}" y1="${y}" y2="${y}" stroke="#7a8090" stroke-dasharray="4 3"/>${bars}</svg>`;
 }
 
 // ---- modes -----------------------------------------------------------------------------------
@@ -809,111 +726,6 @@ function journeyAt(p) {
 const diveAt = (p) => 0.7 * smooth((p - 0.76) / 0.1) * (1 - smooth((p - 0.86) / 0.14));
 const yawAt = (p) => -0.25 + 1.5 * p; // a slow orbit, about 86 degrees over the clip
 
-// First ffmpeg (env, the one Playwright bundles, then PATH) that can write webm (VP8) or mp4 (x264).
-const CODECS = [
-  {
-    name: 'libvpx',
-    ext: 'webm',
-    mime: 'video/webm',
-    // constrained quality: -crf sets the ceiling, -b:v the size budget; cpu-used 3 keeps up with rendering
-    args: (kbps) =>
-      `-c:v libvpx -b:v ${kbps}k -crf 10 -deadline good -cpu-used 3 -threads 2`.split(' '),
-  },
-  {
-    name: 'libx264',
-    ext: 'mp4',
-    mime: 'video/mp4',
-    args: (kbps) =>
-      `-c:v libx264 -crf 20 -maxrate ${kbps}k -bufsize ${2 * kbps}k -movflags +faststart`.split(
-        ' ',
-      ),
-  },
-];
-function findEncoder() {
-  const root =
-    process.env.PLAYWRIGHT_BROWSERS_PATH ?? resolve(dirname(chromium.executablePath()), '../..');
-  const bundled = existsSync(root)
-    ? readdirSync(root)
-        .filter((d) => d.startsWith('ffmpeg-'))
-        .flatMap((d) =>
-          readdirSync(join(root, d))
-            .filter((f) => /^ffmpeg-(linux|mac|win)/.test(f))
-            .map((f) => join(root, d, f)),
-        )
-    : [];
-  for (const bin of [process.env.FFMPEG, ...bundled, 'ffmpeg'].filter(Boolean)) {
-    const listed = spawnSync(bin, ['-hide_banner', '-encoders']).stdout?.toString() ?? '';
-    const codec = CODECS.find((c) => new RegExp(`\\s${c.name}\\s`).test(listed));
-    if (codec) return { bin, ...codec };
-  }
-  throw new Error('no ffmpeg with libvpx or libx264 found (set $FFMPEG to one)');
-}
-
-// JPEG frames (the one still format Playwright's ffmpeg can decode) go in through stdin as they
-// are rendered, so nothing piles up in memory.
-function startEncoder(enc, file, fps, kbps) {
-  const filters = 'crop=trunc(iw/2)*2:trunc(ih/2)*2'; // yuv420p needs even dimensions
-  const input = `-y -loglevel error -f image2pipe -framerate ${fps} -c:v mjpeg -i pipe:0`.split(
-    ' ',
-  );
-  const output = `-vf ${filters} -pix_fmt yuv420p -r ${fps}`.split(' ');
-  const proc = spawn(enc.bin, [...input, ...output, ...enc.args(kbps), file], {
-    stdio: ['pipe', 'ignore', 'pipe'],
-  });
-  let err = '';
-  proc.stderr.on('data', (d) => (err += d));
-  proc.stdin.on('error', () => {}); // a dead ffmpeg is reported through `done`
-  const done = new Promise((ok, no) => {
-    proc.on('error', no);
-    proc.on('close', (code) =>
-      code === 0 ? ok() : no(new Error(`ffmpeg exited ${code}: ${err.trim().slice(-400)}`)),
-    );
-  });
-  done.catch(() => {});
-  return {
-    write: (png) =>
-      Promise.race([
-        new Promise((ok) => (proc.stdin.write(png) ? ok() : proc.stdin.once('drain', ok))),
-        done,
-      ]),
-    finish: () => (proc.stdin.end(), done),
-    kill: () => proc.kill('SIGKILL'),
-  };
-}
-
-// Load the clip in Chromium: it must decode, report a sane duration, and not be black mid-way.
-function inspectVideo(tool, file, mime) {
-  return evalT(
-    tool,
-    async ([b64, type]) => {
-      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-      const video = document.createElement('video');
-      video.muted = true;
-      video.src = URL.createObjectURL(new Blob([bytes], { type }));
-      await new Promise((ok, no) => {
-        video.onloadeddata = ok;
-        video.onerror = () =>
-          no(new Error(`video does not decode: ${video.error?.message ?? video.error?.code}`));
-      });
-      video.currentTime = video.duration / 2;
-      await new Promise((ok) => (video.onseeked = ok));
-      const g = new OffscreenCanvas(64, 64).getContext('2d', { willReadFrequently: true });
-      g.drawImage(video, 0, 0, 64, 64);
-      const px = g.getImageData(0, 0, 64, 64).data;
-      let sum = 0;
-      for (let i = 0; i < px.length; i += 4) sum += (px[i] + px[i + 1] + px[i + 2]) / 3;
-      return {
-        duration: video.duration,
-        width: video.videoWidth,
-        height: video.videoHeight,
-        midLuma: sum / (px.length / 4) / 255,
-      };
-    },
-    [readFileSync(file).toString('base64'), mime],
-    'inspect video',
-  );
-}
-
 async function film(ctxs, v, pre) {
   const { browser, base, tool, out } = ctxs;
   const C = cfg('film');
@@ -922,7 +734,7 @@ async function film(ctxs, v, pre) {
   const total = Math.max(2, Math.round(seconds * fps));
   const sim = Math.max(1, Math.round(60 / fps)); // 60 Hz simulation regardless of output rate
   const label = `film${v ? `[${v}]` : ''}`;
-  const enc = findEncoder();
+  const enc = findEncoder(BROWSERS_ROOT);
   const file = join(out, `${pre}film.${enc.ext}`);
   const kbps = Math.floor((FILM_MAX_MB * 8 * 1024) / (total / fps));
   log(`  ${total} frames @ ${fps} fps, ${sim} sim step(s) each, ${enc.name}, <= ${kbps} kbps`);

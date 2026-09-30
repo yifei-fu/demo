@@ -1,5 +1,14 @@
 //! The five anchor systems in *system coordinates*, with analytic Jacobians.
 //! Kind ids and parameter orders are fixed by DESIGN.md §3.1.
+//!
+//! An anchor is an autonomous flow `ẋ = F_kind(x; p)` with up to eight
+//! parameters `p`: Thomas' cyclically symmetric `ẋ = sin y − b x` (and its
+//! two rotations), Aizawa's sphere-and-tube flow, Lorenz's `σ, ρ, β` and
+//! Rössler's `a, b, c`. Halvorsen's is here so the block format is complete,
+//! but no route uses it. The Jacobian `J = ∂F/∂x` is written out by hand
+//! because the spectrum needs it at every step (`spectrum`); tests check it
+//! against finite differences. `rk4` is the one integrator everything
+//! shares, so the particles, the probes and the tracer agree.
 
 pub type V3 = [f64; 3];
 /// Row-major: `m[row][col]`.

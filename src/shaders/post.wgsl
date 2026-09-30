@@ -6,7 +6,7 @@ struct Post {
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
   c: vec4f,     // pixels per particle, breath
   bg: vec4f,    // background, linear
-  t: vec4f,     // clarity, dive
+  t: vec4f,     // clarity, dive, eased Kaplan-Yorke dimension, still-point flag
   tint: vec4f,  // bloom tint (linear multiplier)
 }
 
@@ -190,6 +190,8 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 
 // Display headroom relative to SDR white (1.0 on SDR): a variant's grade() may use it.
 fn axiom_headroom() -> f32 { return P.b.z; }
+fn axiom_dky() -> f32 { return P.t.z; }
+fn axiom_still() -> f32 { return P.t.w; }
 
 override HDR_OUT: bool = false;
 override DIRECT: bool = false;  // the variant's grade() is the final colour: no background, no AgX

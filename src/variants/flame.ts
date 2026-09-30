@@ -5,7 +5,7 @@ import shadeWgsl from './flame.shade.wgsl?raw';
 /** The heat of chaos: slow light smoulders in oxblood, speed ignites it to white-gold. */
 export const variant: Variant = {
   id: 'flame',
-  order: 1,
+  order: 2,
   name: 'flame',
   tagline: 'the heat of chaos',
   shadeWgsl,
@@ -16,7 +16,7 @@ export const variant: Variant = {
     dof: 1,
     bloom: 7.5,
     bloomTint: [1.0, 0.62, 0.34], // the halo of white-gold light burns orange-red, like film halation
-    clarity: 0.6,
+    clarity: 1.0,
     grain: 0.012,
     aberration: 0.003,
     finish: 'direct',

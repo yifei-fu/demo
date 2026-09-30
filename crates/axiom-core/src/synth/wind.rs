@@ -50,8 +50,8 @@ impl Wind {
         let mut out = [0.0f32; 2];
         for (c, o) in out.iter_mut().enumerate() {
             self.lp[c] += 0.12 * (white(rng) - self.lp[c]);
-            let band = self.band[c].process(self.lp[c] * 2.5, self.centre, 0.9).bp;
-            let whoosh = self.whoosh_band[c].process(white(rng), sweep, 0.6).bp;
+            let band = self.band[c].bandpass(self.lp[c] * 2.5, self.centre, 0.9);
+            let whoosh = self.whoosh_band[c].bandpass(white(rng), sweep, 0.6);
             *o = band * level + whoosh * WHOOSH_GAIN * self.swell * self.swell;
         }
         out

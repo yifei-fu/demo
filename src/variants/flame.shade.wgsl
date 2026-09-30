@@ -23,7 +23,10 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let s = clamp(log2(max(speed, 0.04) / 0.08) / 4.9, 0.0, 1.0);
   // speed contrast: the middle of the range is stretched, so within one attractor the slow parts smoulder
   // in crimson and the fast ones burn gold, instead of everything being one orange
-  let sv = mix(s, smoothstep(0.10, 0.90, s), 0.65);
+  // In volume-filling chaos (D above about 2.4) the cloud is pushed harder toward embers and ash:
+  // hotter, sparser threads over darker voids, so it reads as fire rather than fog.
+  let vol = smoothstep(2.3, 2.75, axiom_dky());
+  let sv = mix(s, smoothstep(0.10, 0.90, s), 0.65 + 0.25 * vol);
   let near = clamp(-depth, -1.2, 1.2);
   let glow = clamp(-depth, 0.0, 3.0);     // in front of the focal plane: a bokeh disc
   let far = clamp(depth, 0.0, 2.0);
@@ -31,7 +34,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
 
   // about 15% of particles are cool embers: more of them far away, fewer near, so the far side of the
   // cloud cools toward violet while the near side stays fire
-  let cool = phase > 0.85 + 0.04 * (seed - 0.5) + 0.06 * clamp(near, -1.0, 1.0);
+  let cool = phase > 0.84 + 0.04 * (seed - 0.5) + 0.06 * clamp(near, -1.0, 1.0);
   // and about 5% are sparks: hotter and brighter, so that out of focus they become glowing discs
   let spark = select(0.0, 1.0, phase > 0.30 && phase < 0.35);
 
@@ -39,13 +42,13 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let t = clamp(sv + jitter + 0.16 * near - 0.04 * far + 0.10 * focus + 0.25 * spark + 0.05 * (seed - 0.5), 0.0, 1.0);
   var c = flame_heat(t);
   // slow embers stay dim so that a dense red coal is not tinted pink by them
-  if (cool) { c = flame_ember(clamp(s + 0.14 * near, 0.0, 1.0), seed) * mix(0.5, 1.8, smoothstep(0.1, 0.6, s)); }
+  if (cool) { c = flame_ember(clamp(s + 0.14 * near, 0.0, 1.0), seed) * mix(0.6, 2.3, smoothstep(0.1, 0.6, s)); }
 
   // distant light is ash: it cools toward a violet grey, which opens dark voids behind the fire
-  c = mix(c, vec3f(0.42, 0.10, 0.24), 0.3 * smoothstep(0.4, 1.4, far));
+  c = mix(c, vec3f(0.42, 0.10, 0.24), (0.3 + 0.4 * vol) * smoothstep(0.4, 1.4, far));
 
   // speed sets the burn: slow pile-ups smoulder, fast threads run hot
-  let burn = mix(0.55, 1.9, sv);
+  let burn = mix(0.55 - 0.25 * vol, 1.9 + 0.7 * vol, sv);
   // a particle that has come to rest has burned down into the one point: it ignites, and as the
   // point opens into a loop (Hopf) the star cools through orange to the crimson of a slow coal
   let star = 1.0 - smoothstep(0.02, 0.12, speed);
@@ -53,7 +56,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
 
   // near light glows, far light fades
   // every ember glints a little differently, so out-of-focus discs are not one flat speckle
-  let glint = 0.6 + 0.8 * fract(phase * 13.7);
-  let depth_gain = exp(-0.25 * far) * (1.0 + 0.5 * glow) * (1.0 + 1.6 * spark) * glint;
+  let glint = mix(0.6, 0.3, vol) + mix(0.8, 1.6, vol) * fract(phase * 13.7);
+  let depth_gain = exp(-0.25 * far) * (1.0 + 0.5 * glow) * (1.0 + (1.6 + 1.4 * vol) * spark) * glint;
   return c * mix(burn, 1.0, star) * depth_gain;
 }

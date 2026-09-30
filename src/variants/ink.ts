@@ -5,7 +5,7 @@ import shadeWgsl from './ink.shade.wgsl?raw';
 /** Sumi ink on warm washi: the one light variant. Filaments absorb; the only colour is the seal. */
 export const variant: Variant = {
   id: 'ink',
-  order: 2,
+  order: 1,
   name: 'Ink',
   tagline: 'one breath of ink',
   shadeWgsl,
