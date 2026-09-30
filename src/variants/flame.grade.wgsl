@@ -1,6 +1,11 @@
-// flame: a warm filmic finish. Energy whitens toward gold as a hot body does, dim light cools to
-// ember red, a red-orange halation bleeds out of the bright regions, the blacks stay deep and warm,
-// and a fine warm grain sits on top.
+// flame: a warm filmic finish, graded to the display directly rather than through AgX. AgX pales every
+// hot colour toward tan and salmon; fire needs the opposite. A per-channel curve lets the brightest
+// channel saturate first, so light walks the heat path on its own: ember red, orange, gold, white.
+// On top: dim light cools to ember red, a red-orange halation bleeds out of bright regions, the
+// blacks stay deep and warm, and a fine warm grain sits over everything.
+const FLAME_BLACK: vec3f = vec3f(0.002125, 0.001214, 0.001517);  // #070405 in linear light
+const FLAME_GAIN: f32 = 2.0;                                      // with the contrast below, matches AgX on grey
+
 fn flame_luma(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
@@ -15,32 +20,36 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   var c = max(hdr, vec3f(0.0));
   let y = flame_luma(c);
 
-  // dim warm light cools to ember red rather than to brown; violet is left alone
-  let warm = smoothstep(0.35, 0.75, c.r / max(c.r + c.g + c.b, 1e-4));
-  let cooling = (1.0 - smoothstep(0.02, 0.6, y)) * warm;
-  c *= mix(vec3f(1.0), vec3f(1.12, 0.80, 0.62), cooling);
+  // Warm pixels lose their blue: the violet embers mixed into a dense warm pixel would otherwise turn
+  // it to salmon and tan. A lone ember still dominates its own pixel and keeps its colour.
+  let warm = 1.0 - smoothstep(0.5, 1.0, c.b / max(c.r, 1e-4));
+  c *= mix(vec3f(1.0), vec3f(1.0, 0.94, 0.30), warm);
+  // dim warm light also cools to ember red rather than to brown
+  let cooling = (1.0 - smoothstep(0.03, 1.0, y)) * warm;
+  c *= mix(vec3f(1.0), vec3f(1.15, 0.62, 0.50), cooling);
 
-  // thermal cascade: an overexposed red spills into orange, orange into yellow. Without it AgX leaks
-  // red equally into green and blue, and a hot coal turns pink instead of orange
-  c.g += 0.26 * max(c.r - 1.0, 0.0);
-  c.b += 0.30 * max(c.g - 1.2, 0.0);
-
-  // heat: a lot of light pushes any hue toward white-gold, so the single point is a star
+  // heat: a lot of light leans toward gold whatever its hue, so the single point is a star
   let heat = smoothstep(0.8, 10.0, y);
-  let ember = mix(vec3f(1.0, 0.58, 0.24), vec3f(1.0, 0.80, 0.52), smoothstep(3.0, 40.0, y));
-  c = mix(c, ember * y, heat * 0.9);
+  let ember = mix(vec3f(1.0, 0.54, 0.16), vec3f(1.0, 0.70, 0.32), smoothstep(3.0, 40.0, y));
+  c = mix(c, ember * y, heat * 0.7);
 
   // halation: red-orange bleed as a function of luminance, since a grade cannot blur
   let bleed = 0.16 * y / (1.0 + 0.12 * y) * smoothstep(0.25, 2.0, y);
   c += vec3f(1.0, 0.30, 0.07) * bleed;
 
-  // saturate the mid-tones ahead of AgX, which desaturates by design
-  let sat = mix(1.35, 1.0, smoothstep(0.5, 6.0, y));
-  c = max(mix(vec3f(flame_luma(c)), c, sat), vec3f(0.0));
+  // the frame burns down toward ember red at the edges
+  let d = uv - 0.5;
+  let edge = smoothstep(0.30, 1.10, dot(d, d) * 2.0);
+  c *= vec3f(1.0 - 0.06 * edge, 1.0 - 0.20 * edge, 1.0 - 0.34 * edge);
 
   // fine warm grain, strongest in the mid-tones
   let g = flame_hash(uv * vec2f(1024.0, 1024.0), floor(time * 8.0)) - 0.5;
-  c *= 1.0 + 0.05 * g * vec3f(1.0, 0.8, 0.6) * smoothstep(0.02, 0.5, y);
+  c *= 1.0 + 0.04 * g * vec3f(1.0, 0.8, 0.6) * smoothstep(0.02, 0.5, y);
 
-  return c;
+  // filmic curve, per channel
+  let k = FLAME_GAIN * c;
+  var o = pow(k / (1.0 + k), vec3f(1.25));
+  // the true core runs past white: a HDR display shows it brighter, an SDR one clamps
+  o += vec3f(1.0, 0.86, 0.62) * 0.5 * smoothstep(8.0, 50.0, y);
+  return o + FLAME_BLACK;
 }

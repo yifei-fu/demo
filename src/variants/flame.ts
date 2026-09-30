@@ -17,8 +17,8 @@ export const variant: Variant = {
     bloom: 7.5,
     grain: 0.012,
     aberration: 0.003,
-    finish: 'agx',
-    background: [0.0275, 0.0118, 0.0176],
+    finish: 'direct',
+    background: [0.0275, 0.0157, 0.0196], // #070405; grade() adds the same black itself (direct finish)
   },
   sound: { preset: 0, rootHz: 55 },
   hud: { accent: '#ffb45a', theme: 'dark' },
