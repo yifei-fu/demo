@@ -16,6 +16,7 @@ struct Frame {
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
+@group(0) @binding(0) var<uniform> law: Law;
 @group(0) @binding(1) var<uniform> F: Frame;
 @group(0) @binding(2) var<storage, read_write> parts: array<vec4f>;
 @group(0) @binding(3) var<storage, read_write> accum: array<atomic<u32>>;
@@ -103,10 +104,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   let h = 0.5 * dt;
   var speed = 0.0;
   for (var s = 0; s < 2; s++) {
-    let k1 = f_world(p) + stir_velocity(p) + extra;
+    let k1 = f_world_of(law, p) + stir_velocity(p) + extra;
     if (s == 0) { speed = length(k1); }
     let pm = p + 0.5 * h * k1;
-    let k2 = f_world(pm) + stir_velocity(pm) + extra;
+    let k2 = f_world_of(law, pm) + stir_velocity(pm) + extra;
     p += h * k2;
   }
   parts[i] = vec4f(p, phase);

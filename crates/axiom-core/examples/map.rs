@@ -175,9 +175,17 @@ fn main() {
     let band = |d: f64| (d + 1e-3).floor();
     let mut rgb = vec![0u8; size * size * 3];
     let mut area = [0usize; 5];
+    let (mut rim_total, mut rim_fixed) = (0usize, 0usize);
     for j in 0..size {
         for i in 0..size {
             let d = level(i, j);
+            if !d.is_nan() {
+                let (u, v) = to_disk(i, j);
+                if u * u + v * v >= 0.49 {
+                    rim_total += 1;
+                    rim_fixed += usize::from(cells[j * size + i].1 == 0);
+                }
+            }
             let mut c = if d.is_nan() { BG } else { palette(d) };
             if !d.is_nan() {
                 area[cells[j * size + i].1 as usize] += 1;
@@ -224,6 +232,10 @@ fn main() {
         "seed {seed}: {size}x{size} in {:.1}s -> {}",
         started.elapsed().as_secs_f64(),
         args[1]
+    );
+    println!(
+        "r >= 0.7: {:.1}% of the annulus is fixed",
+        100.0 * rim_fixed as f64 / rim_total as f64
     );
     println!(
         "disk area  fixed {:.0}%  cycle {:.0}%  torus {:.0}%  strange {:.0}%  labyrinth {:.0}%",

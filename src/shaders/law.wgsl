@@ -1,5 +1,6 @@
 // The world field F(x) of DESIGN §3.2, evaluated from the 68-float LawParams block (§3.3).
 // Rust owns every number; this file only evaluates formulas. Only active slots are evaluated.
+// It declares no bindings: callers (particles, the parameter map) pass a `Law` value in.
 
 struct Slot {
   a: vec4f,   // kind, weight, tau, L
@@ -17,8 +18,6 @@ struct Law {
   s0: Slot,
   s1: Slot,
 }
-
-@group(0) @binding(0) var<uniform> law: Law;
 
 const CONFINE_K: f32 = 8.0;
 
@@ -67,12 +66,12 @@ fn slot_field(s: Slot, x: vec3f) -> vec3f {
   return w * (s.a.z / s.a.w) * (transpose(R) * f);
 }
 
-fn f_world(x: vec3f) -> vec3f {
-  var f = slot_field(law.s0, x) + slot_field(law.s1, x);
-  f -= law.header.z * x;
+fn f_world_of(L: Law, x: vec3f) -> vec3f {
+  var f = slot_field(L.s0, x) + slot_field(L.s1, x);
+  f -= L.header.z * x;
   let m = length(x);
-  if (m > law.header.w) {
-    let e = m - law.header.w;
+  if (m > L.header.w) {
+    let e = m - L.header.w;
     f -= CONFINE_K * e * e * (x / m);
   }
   return f;
