@@ -6,9 +6,21 @@ struct Post {
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
   c: vec4f,     // pixels per particle, breath
   bg: vec4f,    // background, linear
-  t0: vec4f,    // light curve: gain, slope below the knee, slope above it, knee (density)
-  t1: vec4f,    // bloom: threshold, spread, energy cap; denoise tolerance (sigma^2)
 }
+
+// How splatted density becomes light: a power law that opens up wisps and filaments, bending to a
+// much shallower slope at the knee so dense sheets keep their internal detail and only a
+// point-like core runs far into HDR.
+const LIGHT_GAIN: f32 = 0.0045;
+const LIGHT_SLOPE: f32 = 0.88;       // below the knee
+const LIGHT_SLOPE_DENSE: f32 = 0.45; // above it
+const LIGHT_KNEE: f32 = 250.0;       // in units of density relative to a uniform screen spread
+// Bloom is a halo, not a fog: only light well above the exposure's white reaches it.
+const BLOOM_THRESHOLD: f32 = 5.0;
+const BLOOM_SPREAD: f32 = 0.75;      // weight of each successively wider level
+const BLOOM_CAP: f32 = 80.0;         // a delta-like core holds enormous energy; compress it
+// Denoise tolerance in Poisson sigmas squared.
+const DENOISE_SIGMA2: f32 = 4.0;
 
 @group(0) @binding(0) var<uniform> P: Post;
 
@@ -35,13 +47,8 @@ fn cell(ip: vec2i) -> vec4f {
   return vec4f(accum[u32(c.y * w + c.x)]);
 }
 
-// How splatted density becomes light: a power law that opens up wisps and filaments, bending to a
-// much shallower slope at the knee so dense sheets keep their internal detail and only a
-// point-like core runs far into HDR.
 fn light(x: f32) -> f32 {
-  let p1 = P.t0.y;
-  let p2 = P.t0.z;
-  return P.t0.x * pow(x, p1) * pow(1.0 + pow(x / P.t0.w, 2.0), -0.5 * (p1 - p2));
+  return LIGHT_GAIN * pow(x, LIGHT_SLOPE) * pow(1.0 + pow(x / LIGHT_KNEE, 2.0), -0.5 * (LIGHT_SLOPE - LIGHT_SLOPE_DENSE));
 }
 
 fn density(cellv: vec4f) -> vec3f {
@@ -66,7 +73,7 @@ fn denoised(ip: vec2i) -> vec4f {
       let c = cell(ip + vec2i(i, j));
       let dn = (c.w - mid.w) / FIXED;
       let tent = select(1.0, 2.0, i == 0 || j == 0);
-      let w = tent * exp(-dn * dn / (2.0 * P.t1.w * (n0 + 1.0)));
+      let w = tent * exp(-dn * dn / (2.0 * DENOISE_SIGMA2 * (n0 + 1.0)));
       acc += c * w;
       wsum += w;
     }
@@ -92,9 +99,9 @@ fn tap(uv: vec2f) -> vec3f { return textureSampleLevel(srcTex, samp, uv, 0.0).rg
 
 fn knee(c0: vec3f) -> vec3f {
   // a delta-like core holds enormous energy; compress it so the halo stays a glow, not a flood
-  let c = c0 / (1.0 + max(c0.r, max(c0.g, c0.b)) / P.t1.z);
+  let c = c0 / (1.0 + max(c0.r, max(c0.g, c0.b)) / BLOOM_CAP);
   // soft threshold: only what is genuinely bright feeds the halo
-  let t = P.t1.x;
+  let t = BLOOM_THRESHOLD;
   let k = 0.3 * t + 0.02;
   let l = max(c.r, max(c.g, c.b));
   let soft = clamp(l - t + k, 0.0, 2.0 * k);
@@ -142,7 +149,7 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   sum += tap(uv + vec2f(h.x, -h.y)) * 2.0;
   sum += tap(uv + vec2f(0.0, -h.y * 2.0));
   sum += tap(uv + vec2f(-h.x, -h.y)) * 2.0;
-  return vec4f(sum / 12.0 * P.t1.y, 1.0);
+  return vec4f(sum / 12.0 * BLOOM_SPREAD, 1.0);
 }
 
 // ---------------------------------------------------------------- composite

@@ -8,7 +8,7 @@ import type { Variant } from './variants/types';
 
 const WORKGROUP = 64;
 const MAX_GROUPS_X = 65535;
-const FRAME_FLOATS = 48; // 12 vec4
+const FRAME_FLOATS = 44; // 11 vec4
 const FLAG_INIT = 1;
 const FLAG_SPLAT = 2;
 const SHAKE_DECAY = 3.2; // 1/s
@@ -17,7 +17,7 @@ const MAX_COC = 0.045; // fraction of height
 const NEAR = 0.03;
 const MAX_SUBSTEP_DT = 0.03; // world time; keeps RK2 accurate on a fast law at low fps
 const MAX_SUBSTEPS = 4;
-const TAN_HALF = 0.33;
+const TAN_HALF = 0.31;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
 
@@ -53,8 +53,6 @@ export class Particles {
   private readonly f32 = new Float32Array(this.frameData);
   private readonly u32 = new Uint32Array(this.frameData);
   private bindGroup: GPUBindGroup | null = null;
-  /** dust weight, tracer weight, age (s) where newcomers start / finish becoming full light */
-  readonly tune = new Float32Array([0.08, 10, 1.5, 6]);
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;
@@ -169,10 +167,9 @@ export class Particles {
       ],
       36,
     );
-    f.set(this.tune, 40);
     this.u32.set(
       [p.frame >>> 0, this.count, this.seed, extraFlags | (p.splat ? FLAG_SPLAT : 0)],
-      44,
+      40,
     );
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 

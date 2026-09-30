@@ -157,8 +157,16 @@ export class CameraRig {
     this.diveVel = 0;
   }
 
-  /** `recede` (0..1 of a fraction) pulls the camera back, e.g. while the map is open. */
-  update(input: Input, dt: number, recede = 0): CameraState {
+  /**
+   * `recede` is a fraction of extra distance (e.g. while the map is open); `look` is the point the
+   * camera orbits and looks at, the centre of the attractor rather than always the origin.
+   */
+  update(
+    input: Input,
+    dt: number,
+    recede = 0,
+    look: readonly [number, number, number] = [0, 0, 0],
+  ): CameraState {
     this.time += dt;
     const target = Math.max(input.dive, input.hold ? 1 : 0);
     // stiffer going in than coming out: diving is intent, drifting back is release
@@ -181,7 +189,7 @@ export class CameraRig {
       Math.sin(pitch) * dist,
       Math.cos(az) * cp * dist,
     ];
-    // holographic parallax: slide the eye sideways/up a little while still looking at the origin
+    // holographic parallax: slide the eye sideways/up a little while still looking at the target
     const rx = Math.cos(az);
     const rz = -Math.sin(az);
     const par = dist * 0.09;
@@ -204,7 +212,7 @@ export class CameraRig {
       r[2] * s.fwd[0] - r[0] * s.fwd[2],
       r[0] * s.fwd[1] - r[1] * s.fwd[0],
     ];
-    s.eye = eye;
+    s.eye = [eye[0] + look[0], eye[1] + look[1], eye[2] + look[2]];
     s.dist = len;
     s.dive = this.dive;
     s.focus = len * (1 - 0.45 * ease);

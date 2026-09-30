@@ -5,7 +5,7 @@ import type { Variant } from './variants/types';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 const BLOOM_LEVELS = 5;
-const UNIFORM_FLOATS = 28;
+const UNIFORM_FLOATS = 20;
 const VIGNETTE = 0.42;
 const ACCUM_BYTES_PER_PIXEL = 16;
 export interface PostSettings {
@@ -56,8 +56,6 @@ export class Post {
   private readonly upPipe: GPURenderPipeline;
   private readonly compositePipe: GPURenderPipeline;
   private readonly background: number[];
-  /** light curve (gain, slope, slope above knee, knee) then bloom (threshold, spread, cap) */
-  readonly tune = new Float32Array([0.0146, 0.62, 0.5, 400, 2.0, 0.95, 80, 12]);
 
   private accumBuf: GPUBuffer | null = null;
   private hdr: Level[] = [];
@@ -182,7 +180,6 @@ export class Post {
         device.createBindGroup({
           layout: this.upPipe.getBindGroupLayout(0),
           entries: [
-            pb,
             { binding: 1, resource: view(this.bloom[i]) },
             { binding: 2, resource: smp },
           ],
@@ -213,14 +210,15 @@ export class Post {
     s: PostSettings,
     particleCount: number,
     time: number,
+    zoom = 1,
   ): void {
     const d = this.data;
     d.set([this.width, this.height, 1 / this.width, 1 / this.height], 0);
     d.set([s.exposure, s.trail, s.bloom, s.grain], 4);
     d.set([s.vignette, s.ca, this.gpu.hdrHeadroom, time % 1000], 8);
-    d.set([(this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
+    // zoom: diving spreads the same light over more pixels; lift the density so it stays lit
+    d.set([(zoom * this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
     d.set([...this.background, 0], 16);
-    d.set(this.tune, 20);
     this.device.queue.writeBuffer(this.params, 0, d);
 
     const cur = this.flip;

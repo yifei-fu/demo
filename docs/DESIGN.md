@@ -279,6 +279,19 @@ interface Variant {
 Registry in `src/variants/index.ts`; selected via `?v=<id>` (default = first entry); the start
 screen lists shipped variants as a quiet row of names.
 
+**Round 3 additions** (engine implements; variants consume):
+- Variants are **auto-discovered**: `index.ts` uses `import.meta.glob('./*.ts', { eager: true })`
+  and registers every module that exports `variant: Variant`; sorted by `order` (origin = 0).
+  A variant is exactly three files, `<id>.ts`, `<id>.shade.wgsl` and `<id>.grade.wgsl`, and it
+  touches nothing else.
+- `render.finish: 'agx' | 'direct'`. `'agx'` is the default: the engine adds the background and
+  applies AgX. `'direct'` means `grade()` returns the **final display-linear colour including
+  the background** (for example paper × exp(−k·hdr) for absorptive ink). The engine then applies
+  only grain, dither and output encoding. `background` still themes the page and gate.
+- `hud.theme: 'dark' | 'light'` switches HUD, gate and lens text/ink colours via CSS variables;
+  `hud.accent` stays the accent colour.
+- `createParamMap(gpu, core, seed, host, accent, theme)` receives the theme too.
+
 ---
 
 ## 8. Round-2 module interfaces

@@ -13,7 +13,6 @@ struct Frame {
   stir: vec4f,    // touch ndc x, y, strength, unused
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, unused...
-  tune: vec4f,    // dust weight, tracer weight, age of full brightness start / end (s)
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -28,6 +27,10 @@ const SPAWN_RADIUS: f32 = 1.2;
 const ESCAPE_R2: f32 = 2.56;             // respawn beyond |x| = 1.6
 const TRICKLE_PER_SECOND: f32 = 0.12;   // 0.2 % per frame at 60 fps
 const TRACER_FRACTION: f32 = 0.004;  // a few particles burn much brighter and draw visible streams
+const DUST_WEIGHT: f32 = 0.08;       // newcomers are faint
+const TRACER_WEIGHT: f32 = 30.0;     // ... except a few tracers that draw the streams
+const SETTLED_START: f32 = 1.5;      // age (s) at which a newcomer starts to become full light
+const SETTLED_END: f32 = 6.0;
 const OLD_TRACER_WEIGHT: f32 = 6.0;  // settled tracers keep a modest sparkle
 const REFERENCE_SPEED: f32 = 0.45;   // the hue newcomers wear, whatever their speed
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
@@ -146,9 +149,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   // Newcomers are still falling toward the attractor. They are what makes the cloud read as
   // streams rather than a fog, so they are dim and share one calm hue; once a particle has
   // settled onto the attractor it takes the variant's full light.
-  let settled = smoothstep(F.tune.z, F.tune.w, age);
+  let settled = smoothstep(SETTLED_START, SETTLED_END, age);
   let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION;
-  let wgt = mix(select(F.tune.x, F.tune.y, tracer), select(1.0, OLD_TRACER_WEIGHT, tracer), settled);
+  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), select(1.0, OLD_TRACER_WEIGHT, tracer), settled);
   let calm = mix(REFERENCE_SPEED, speed, settled);
   let col = max(shade(calm, phase, cz - F.lens.x, F.misc.x), vec3f(0.0)) * (wgt * FIXED);
   atomicAdd(&accum[base], u32(col.r));

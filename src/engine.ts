@@ -1,7 +1,7 @@
 /** Owns the simulation-and-render pipeline; `advance` is one frame, whether from rAF or a test. */
 import { backingSize, type Gpu } from './gpu';
 import type { ParamMap } from './map';
-import { Bead, CameraRig } from './navigator';
+import { Bead, CameraRig, DIST_FAR } from './navigator';
 import { Particles, type StirParams } from './particles';
 import { Post, settingsFor, type PostSettings } from './post';
 import { Sensors } from './sensors';
@@ -10,6 +10,12 @@ import { LAW_LEN } from './law';
 import type { Core, SpectrumReading } from './wasm';
 
 const STIR_STRENGTH = 1;
+/** The camera follows the attractor's centroid (a slow average of the spectrum probe). */
+const CENTER_TAU = 3;
+const CENTER_FOLLOW = 0.9;
+/** Diving magnifies the cloud; density is lifted by (default distance / distance)^p, capped. */
+const ZOOM_GAIN_POWER = 1.5;
+const MAX_ZOOM_GAIN = 14;
 /** World-time units the spectrum probe advances per frame (about 24x real time, so it converges). */
 const SPECTRUM_STEP = 0.4;
 /** Pinch travel (sum of relative finger-distance changes, decaying) that opens / closes the map. */
@@ -18,6 +24,9 @@ const PINCH_CLOSE = -0.25;
 /** The 3D view yields to the open map: dimmer and a little further away. */
 const MAP_DIM = 0.78;
 const MAP_RECEDE = 0.12;
+/** Trail persistence added per regime (fixed point, cycle, torus, strange, labyrinth): loops and
+ *  points paint light for longer, a volume-filling labyrinth stays crisp instead of smearing. */
+const REGIME_TRAIL = [0.05, 0.04, 0.02, 0, -0.04];
 
 export class Engine {
   readonly sensors: Sensors;
@@ -42,6 +51,8 @@ export class Engine {
   private map: ParamMap | null = null;
   private mapAmount = 0;
   private pinchAcc = 0;
+  private trailBias = 0;
+  private readonly center: [number, number, number] = [0, 0, 0];
   private stirGain = 0;
   private hookStir: { x: number; y: number; strength: number; left: number } | null = null;
   private sinceReset = 0;
@@ -120,7 +131,7 @@ export class Engine {
     this.core.spectrumStep(this.law, SPECTRUM_STEP);
     this.spectrum = this.core.spectrumRead();
     this.particles.setLaw(this.law);
-    const cam = this.rig.update(input, dt, this.mapAmount * MAP_RECEDE);
+    const cam = this.rig.update(input, dt, this.mapAmount * MAP_RECEDE, this.followCenter(dt));
 
     const stir = this.stirParams(input.stir, dt);
     this.time += dt;
@@ -143,6 +154,8 @@ export class Engine {
       const n = this.sinceReset++;
       const s = this.settings;
       const still = 1 - Math.min(0.7, cam.motion * 0.35);
+      this.trailBias +=
+        ((REGIME_TRAIL[this.spectrum.regime] ?? 0) - this.trailBias) * (1 - Math.exp(-dt / 1.5));
       const breathAmp = this.begun ? 0.015 : 0.05;
       const breath = 1 + breathAmp * Math.sin((this.time * Math.PI * 2) / 6.5);
       this.post.encode(
@@ -150,11 +163,12 @@ export class Engine {
         this.gpu.context.getCurrentTexture().createView(),
         {
           ...s,
-          trail: Math.min(s.trail * still, n / (n + 1)),
+          trail: Math.min((s.trail + this.trailBias) * still, n / (n + 1)),
           breath: breath * (1 - MAP_DIM * this.mapAmount),
         },
         this.particles.active,
         this.time,
+        Math.min(MAX_ZOOM_GAIN, (DIST_FAR / cam.dist) ** ZOOM_GAIN_POWER),
       );
       this.map?.frame(enc, [this.bead.u, this.bead.v], this.time);
     } else {
@@ -165,6 +179,16 @@ export class Engine {
 
   settled(): Promise<void> {
     return this.gpu.device.queue.onSubmittedWorkDone();
+  }
+
+  /** Slowly track the attractor's centre so off-centre attractors sit in the middle of the frame. */
+  private followCenter(dt: number): [number, number, number] {
+    const k = 1 - Math.exp(-dt / CENTER_TAU);
+    const t = this.spectrum.tracer;
+    const c = this.center;
+    for (let i = 0; i < 3; i++)
+      if (Number.isFinite(t[i])) c[i] += (t[i] * CENTER_FOLLOW - c[i]) * k;
+    return c;
   }
 
   private updateLaw(): void {
