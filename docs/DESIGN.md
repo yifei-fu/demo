@@ -312,6 +312,17 @@ screen lists shipped variants as a quiet row of names.
 - URL flags: `?clean` hides all HUD and the lens, for hero captures. `?perf` shows a frame-time
   overlay (GPU timestamps where supported) for real-device testing.
 
+**Round 5: selection and final contract.** After four rounds of critique, three art directions
+ship: **Prism** (order 0, the default), **Ink** (1) and **Flame** (2). Origin and Abyss were cut.
+They remain in git history (commit `4122ba8`, `src/variants/{origin,abyss}.*`), and Abyss's sound
+preset 3 is removed from the crate. The engine also exposes two smoothed readings to both
+`shade()` and `grade()`:
+- `axiom_dky() -> f32`, the live Kaplan–Yorke dimension (0–3)
+- `axiom_still() -> f32`, which is 1 when the regime is a fixed point and 0 otherwise
+
+Variants can use these to gate regime-specific touches, for example a centre glint only on the
+still point, or clarity only in volume-filling chaos.
+
 ---
 
 ## 8. Round-2 module interfaces
