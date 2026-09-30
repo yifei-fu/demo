@@ -300,6 +300,18 @@ screen lists shipped variants as a quiet row of names.
   `hud.accent` stays the accent colour.
 - `createParamMap(gpu, core, seed, host, accent, theme)` receives the theme too.
 
+**Round 4 additions** (engine implements, variants may use; all optional with neutral defaults):
+- `render.clarity: number` (default 0): local contrast. The engine adds
+  `clarity · (hdr − blurred(hdr))` from a bloom-pyramid level before `grade()`, so filaments in
+  dense, volume-filling chaos stay legible.
+- `render.bloomTint: [r, g, b]` (default `[1, 1, 1]`): a linear multiplier on the bloom term only.
+- `axiom_headroom() -> f32` can be called inside `grade()`. It returns the display headroom
+  (1.0 in SDR).
+- The `shade()` contract documents `REFERENCE_SPEED` (the speed newcomers are shaded with) as a
+  stable constant.
+- URL flags: `?clean` hides all HUD and the lens, for hero captures. `?perf` shows a frame-time
+  overlay (GPU timestamps where supported) for real-device testing.
+
 ---
 
 ## 8. Round-2 module interfaces
