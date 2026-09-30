@@ -41,9 +41,11 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let breath = 1.0 + 0.08 * swell;
 
   // caustics drift slowly up-left across the frame
-  let web = abyss_caustic(uv * vec2f(asp, 1.0) + vec2f(0.0, 0.0), ph);
+  // (a broad web and a finer one riding on it)
+  let pa = uv * vec2f(asp, 1.0);
+  let web = 0.7 * abyss_caustic(pa, ph) + 0.3 * abyss_caustic(pa * 2.7 + vec2f(5.3, 1.9), ph);
 
-  var c = hdr * breath * (1.0 + 0.10 * (web - 0.2));
+  var c = hdr * breath * (1.0 + 0.24 * (web - 0.2));
   // the brightest light swells a little more than the water around it: the nucleus breathes
   c *= 1.0 + 0.10 * swell * smoothstep(1.0, 8.0, max(c.r, max(c.g, c.b)));
   let y = abyss_luma(c);
@@ -52,10 +54,11 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let deep = 1.0 - smoothstep(0.0, 0.6, y);
   c *= mix(vec3f(1.0), vec3f(0.76, 0.97, 1.12), 0.55 * deep);
   c = max(mix(vec3f(abyss_luma(c)), c, 1.32), vec3f(0.0));
-  // whatever burns hot burns aqua-white, the colour of a real flash in the water, not blue or grey
+  // whatever burns hot burns cyan: blue light pours into green as it brightens, so a dense core reads
+  // as aqua-white, the colour of a real flash in the water, and never as lilac; teal is left alone
   let m = max(c.r, max(c.g, c.b));
-  let hot = smoothstep(0.9, 7.0, m);
-  c = mix(c, max(y, 0.3 * m) * vec3f(0.42, 1.0, 0.92) / 0.86, 0.85 * hot);
+  let hot = smoothstep(0.6, 5.0, m);
+  c = mix(c, vec3f(c.r, max(c.g, 0.85 * c.b), 0.9 * c.b), hot);
 
   // depth haze: lifted teal blacks, keener toward the top of the frame, threaded with the caustic web
   let above = (0.55 + 0.45 * (1.0 - uv.y)) * (1.0 - 0.45 * smoothstep(0.15, 0.75, length(d)));

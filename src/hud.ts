@@ -116,8 +116,9 @@ export class Hud {
     setTimeout(() => this.gate.remove(), 1600);
   }
 
-  setReadout(params: Float32Array, spectrum: SpectrumReading): void {
-    this.readout.update(params, spectrum, performance.now());
+  /** `time`: simulation seconds, so the readout behaves the same when tests step frames quickly. */
+  setReadout(params: Float32Array, spectrum: SpectrumReading, time: number): void {
+    this.readout.update(params, spectrum, time);
   }
 
   setDebug(text: string): void {

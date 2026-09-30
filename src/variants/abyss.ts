@@ -11,10 +11,10 @@ export const variant: Variant = {
   shadeWgsl,
   gradeWgsl,
   render: {
-    exposure: 8.5,
+    exposure: 10,
     trail: 0.9,
     dof: 1.2,
-    bloom: 38,
+    bloom: 17,
     grain: 0.013,
     aberration: 0.005,
     finish: 'agx',

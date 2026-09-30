@@ -64,6 +64,10 @@ body {
   background: var(--ink);
   touch-action: none;
   outline: none;
+  transition: opacity 0.9s ease;
+}
+#stage.arriving {
+  opacity: 0;
 }
 
 #ui {

@@ -11,11 +11,11 @@ export const variant: Variant = {
   shadeWgsl,
   gradeWgsl,
   render: {
-    exposure: 7,
+    exposure: 9.5,
     trail: 0.9,
     dof: 2,
     bloom: 8,
-    grain: 0.004,
+    grain: 0.003,
     aberration: 0,
     finish: 'direct',
     // #efe9df, sRGB: the page, the gate and the canvas edge are all the same paper

@@ -6,8 +6,8 @@
 import type { Extent } from './extent';
 
 /** Radius (world units, 90th percentile) that fills about 75 % of the short side at the default distance. */
-const RADIUS_AT_UNITY = 0.8;
-const SCALE_MIN = 0.8;
+const RADIUS_AT_UNITY = 0.74;
+const SCALE_MIN = 0.9;
 const SCALE_MAX = 1.7;
 /** Below this radius the cloud is a point: hold the default framing. */
 const POINT_RADIUS = 0.05;

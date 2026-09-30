@@ -14,7 +14,7 @@ export const variant: Variant = {
     exposure: 6.2,
     trail: 0.88,
     dof: 1,
-    bloom: 9,
+    bloom: 7.5,
     grain: 0.012,
     aberration: 0.003,
     finish: 'agx',

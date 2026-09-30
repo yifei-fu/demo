@@ -5,8 +5,8 @@ import type { SpectrumReading } from './wasm';
 const MINUS = '−';
 const ANCHORS = ['Thomas', 'Aizawa', 'Lorenz', 'Rössler', 'Halvorsen'];
 const REGIMES = ['fixed point', 'cycle', 'torus', 'strange', 'labyrinth'];
-/** A regime must hold this long before the label changes, so a boundary does not flicker. */
-const REGIME_HOLD_MS = 500;
+/** A regime must hold this many seconds (of simulation time) before the label changes. */
+const REGIME_HOLD = 0.5;
 
 const num = (v: number): string => Math.abs(v).toFixed(2);
 const term = (v: number): string => (v < 0 ? `+ ${num(v)}` : `${MINUS} ${num(v)}`);
@@ -46,6 +46,7 @@ export class Readout {
   private shown = -1;
   private candidate = -1;
   private since = 0;
+  private lastUpdate = 0;
   private text = ['', '', ''];
 
   constructor() {
@@ -62,11 +63,14 @@ export class Readout {
     const [a, b] = law.slots;
     const dominant = b.kind >= 0 && b.weight > a.weight ? b : a;
 
+    // A long gap since the last update (a test stepping many frames at once) is as good as a hold.
+    const gap = now - this.lastUpdate > REGIME_HOLD;
+    this.lastUpdate = now;
     if (s.regime !== this.candidate) {
       this.candidate = s.regime;
       this.since = now;
     }
-    if (this.shown < 0 || (this.candidate !== this.shown && now - this.since > REGIME_HOLD_MS))
+    if (this.shown < 0 || gap || (this.candidate !== this.shown && now - this.since > REGIME_HOLD))
       this.shown = this.candidate;
 
     const l1 = `${s.l1 < 0 ? MINUS : '+'}${Math.abs(s.l1).toFixed(2)}`;

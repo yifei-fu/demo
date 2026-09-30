@@ -81,8 +81,12 @@ async function boot(): Promise<void> {
   );
   void gpu.lost.then((reason) => hud.showLost(reason));
 
-  // tests drive the simulation themselves; everyone else opens on a cloud already in flow
-  if (!flags.capture) await engine.warmUp();
+  // tests drive the simulation themselves; everyone else opens on a cloud already in flow, which
+  // fades in from the dark once its first frame is drawn
+  if (!flags.capture) {
+    canvas.classList.add('arriving');
+    await engine.warmUp();
+  }
 
   if (flags.skipintro) {
     engine.sensors.arm();
@@ -93,7 +97,7 @@ async function boot(): Promise<void> {
   if (flags.debug) Object.assign(window, { __axiomEngine: engine });
 
   let fps = 0;
-  const refreshReadout = (): void => hud.setReadout(engine.law, engine.spectrum);
+  const refreshReadout = (): void => hud.setReadout(engine.law, engine.spectrum, engine.time);
   bindHooks(hooks, engine, () => fps, refreshReadout);
   new ResizeObserver(() => engine.resize()).observe(canvas);
 
@@ -102,6 +106,7 @@ async function boot(): Promise<void> {
   await engine.settled();
   refreshReadout();
   hooks.ready = true;
+  requestAnimationFrame(() => canvas.classList.remove('arriving'));
   if (flags.capture) return; // deterministic and silent: frames advance only through __axiom.step
 
   let last = 0;

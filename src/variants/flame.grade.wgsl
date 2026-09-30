@@ -18,11 +18,16 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // dim warm light cools to ember red rather than to brown; violet is left alone
   let warm = smoothstep(0.35, 0.75, c.r / max(c.r + c.g + c.b, 1e-4));
   let cooling = (1.0 - smoothstep(0.02, 0.6, y)) * warm;
-  c *= mix(vec3f(1.0), vec3f(1.12, 0.78, 0.70), cooling);
+  c *= mix(vec3f(1.0), vec3f(1.12, 0.80, 0.62), cooling);
+
+  // thermal cascade: an overexposed red spills into orange, orange into yellow. Without it AgX leaks
+  // red equally into green and blue, and a hot coal turns pink instead of orange
+  c.g += 0.26 * max(c.r - 1.0, 0.0);
+  c.b += 0.30 * max(c.g - 1.2, 0.0);
 
   // heat: a lot of light pushes any hue toward white-gold, so the single point is a star
   let heat = smoothstep(0.8, 10.0, y);
-  let ember = mix(vec3f(1.0, 0.62, 0.28), vec3f(1.0, 0.84, 0.58), smoothstep(2.0, 30.0, y));
+  let ember = mix(vec3f(1.0, 0.58, 0.24), vec3f(1.0, 0.80, 0.52), smoothstep(3.0, 40.0, y));
   c = mix(c, ember * y, heat * 0.9);
 
   // halation: red-orange bleed as a function of luminance, since a grade cannot blur

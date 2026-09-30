@@ -35,8 +35,8 @@ const DUST_WEIGHT: f32 = 0.08;
 const SETTLED_START: f32 = 1.5;      // age (s) at which a newcomer starts to become full light
 const SETTLED_END: f32 = 6.0;
 const REFERENCE_SPEED: f32 = 0.45;   // the hue newcomers wear, whatever their speed
-const TRACER_FRACTION: f32 = 0.0016;
-const TRACER_WEIGHT: f32 = 5.0;
+const TRACER_FRACTION: f32 = 0.002;
+const TRACER_WEIGHT: f32 = 7.0;
 const TAIL_STEPS: i32 = 14;
 const TAIL_DT: f32 = 0.04;           // world time between tail samples (a 0.55 s tail)
 // The attractor's extent is measured on a sparse sample of settled particles: the sum of their
@@ -186,11 +186,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 
   if (tracer) {
     // a comet tail: the recent path, walked backward along the flow, fading with age
+    // (each sample lands at a random spot on its segment, so successive frames fill the line in)
     var pb = q_draw;
     for (var k = 1; k <= TAIL_STEPS; k++) {
-      pb -= f_world_of(law, pb) * TAIL_DT;
-      let fade = 1.0 - f32(k) / f32(TAIL_STEPS + 1);
-      splat(pb, col, wgt * fade * fade, pcg(hj + u32(k) * 0x9e3779b9u));
+      let next = pb - f_world_of(law, pb) * TAIL_DT;
+      let hk = pcg(hj + u32(k) * 0x9e3779b9u);
+      let fade = 1.0 - (f32(k) - u01(hk)) / f32(TAIL_STEPS + 1);
+      splat(mix(pb, next, u01(pcg(hk))), col, wgt * fade * fade, hk);
+      pb = next;
     }
   }
 }
