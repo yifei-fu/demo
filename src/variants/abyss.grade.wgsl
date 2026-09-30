@@ -37,8 +37,9 @@ fn abyss_caustic(p: vec2f, ph: f32) -> f32 {
 // many stops; only the last stretch toward full brightness gives up its colour, into a pale aqua.
 fn abyss_tone(c: vec3f) -> vec3f {
   let m = max(max(c.r, max(c.g, c.b)), 1e-6);
-  let t = pow(log2(1.0 + 24.0 * m) / log2(961.0), 1.5);
-  let pale = vec3f(0.86, 1.0, 1.0) * t;
+  let t = pow(log2(1.0 + 24.0 * m) / log2(961.0), 1.38);
+  // on an HDR display the last stretch of the core is allowed past paper white; on SDR this is 1
+  let pale = vec3f(0.86, 1.0, 1.0) * t * (1.0 + (axiom_headroom() - 1.0) * smoothstep(0.8, 1.0, t));
   return mix(c * (t / m), pale, 0.85 * smoothstep(0.55, 1.0, t));
 }
 

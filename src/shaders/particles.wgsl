@@ -13,8 +13,8 @@ struct Frame {
   stir: vec4f,    // touch ndc x, y, strength, unused
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
-  probe: vec4f,   // xyz: centre the extent histogram is measured from
-  tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor
+  probe: vec4f,   // xyz: centre the extent histogram is measured from, w: the attractor's radius
+  tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor, depth cue strength
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -49,6 +49,7 @@ const HIST_RANGE: f32 = 2.0;
 const SPEED_BINS: u32 = 48u;
 const SPEED_BASE: f32 = -8.0;
 const SPEED_PER_OCTAVE: f32 = 3.0;
+const DEPTH_CUE: f32 = 5.0;          // e-folds of dimming across the attractor at full strength
 const BOKEH_SAMPLE_PX: f32 = 4.5;    // a particle blurred wider than this deposits several samples
 const BOKEH_MAX_SAMPLES: u32 = 8u;
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
@@ -98,10 +99,15 @@ fn stochastic(x: vec3f, h: u32) -> vec3<u32> {
 // confusion (stochastic depth of field). `col` is linear colour, `wgt` its particle weight. A
 // particle blurred over many pixels deposits several samples, each with a share of the weight, so
 // soft bokeh volumes fill in smoothly instead of speckling.
-fn splat(pos: vec3f, col: vec3f, wgt: f32, hj: u32) {
+fn splat(pos: vec3f, col: vec3f, wgt0: f32, hj: u32) {
   let d = pos - F.eye.xyz;
   let cz = dot(d, F.fwd.xyz);
   if (cz < F.lens.z) { return; }
+  // Depth cue: inside a volume-filling attractor (a labyrinth) every layer overlaps into fog, so
+  // the far side is dimmed and the near filaments stand out. Zero strength leaves light untouched.
+  let radius = max(F.probe.w, 0.2);
+  let far = clamp((cz - F.lens.x + radius) / (2.0 * radius), 0.0, 1.0);
+  let wgt = wgt0 * exp(-DEPTH_CUE * F.tone.w * far);
   let cx = dot(d, F.right.xyz);
   let cy = dot(d, F.up.xyz);
   let ndc = vec2f(cx / cz * F.right.w, cy / cz * F.up.w);

@@ -46,33 +46,37 @@ const PRISM_FALLING: f32 = 0.45;
 fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let s = clamp(log2(max(speed, 0.04) / 0.08) / 5.2, 0.0, 1.0);
   let z = clamp(depth, -1.0, 1.0);
-  // Settled light, about 190 - 550 nm: one colour cycle from ice-white through cream, gold, coral,
-  // rose and lilac to sky, so the middle of the range, where most light lives, is warm pearl.
-  // Slow light is a thin ice film (the resting point); near light is thin, far light thick and
-  // pale, which is atmospheric perspective for free, and turning the phone slides hue along depth.
-  // Defocused light, near or far, keeps its hue flat, so bokeh discs are soft and pearly, not striped.
-  let defocus = smoothstep(0.25, 0.9, abs(z));
-  let settled_d = 258.0 + 270.0 * s * (1.0 - 0.55 * defocus) + 50.0 * z + 40.0 * min(z, 0.0) + 24.0 * (phase - 0.5) + 60.0 * (seed - 0.5);
+  // Settled light, about 190 - 600 nm: ice-white through cream, gold, coral, rose, lilac and sky, a
+  // full cycle or more, so speed shimmers along a filament. Slow light is a thin ice film (the
+  // resting point). Near light is thin, far light thick and pale, which is atmospheric perspective
+  // for free; the attractor spans about one cycle in depth, so every line of sight through a dense
+  // volume adds up to pearl, and turning the phone slides hue along the depth.
+  let focused_d = 250.0 + 260.0 * s + 105.0 * z + 30.0 * min(z, 0.0);
+  // Far from the focal plane (the dive) light drifts to a warm pearl, cream to rose, and stops
+  // changing hue with speed, so bokeh discs are soft and pearly rather than striped or violet.
+  let defocus = smoothstep(0.9, 2.2, abs(depth));
+  let pearl_d = 296.0 + 50.0 * s;
+  let settled_d = mix(focused_d, pearl_d, 0.7 * defocus) + 12.0 * (phase - 0.5) + 60.0 * (seed - 0.5);
   // Falling light is split as by a prism: each newcomer keeps one hue of its own across a full cycle,
   // so the streams fan out as a spectrum and the faint haze between them averages to pearl.
   let falling_d = 250.0 + 360.0 * phase + 60.0 * (seed - 0.5);
   let fresh = 1.0 - smoothstep(0.0, 0.02, abs(speed - PRISM_FALLING));
   var c = prism_film(clamp(mix(settled_d, falling_d, fresh), 190.0, 900.0));
-  // Pastel: a veil of white. Defocused light, near or far, is veiled further, so bokeh discs are
-  // soft and pearly rather than striped, and equalise the luminance so no hue is a dark gap.
-  let veil = 0.66 - 0.24 * smoothstep(0.15, 0.8, -z) - 0.10 * smoothstep(0.3, 1.0, z);
+  // Pastel: a veil of white, more of it the further out of focus, then equalise the luminance so no
+  // hue is a dark gap in a filament.
+  let veil = 0.66 - 0.2 * defocus;
   c = mix(vec3f(1.0), c, veil);
   c = c / mix(1.0, max(prism_luma(c), 0.45), 0.45);
   // keep the palette to pearl, not acid: greens lean to mint and aqua, yellows to peach and cream
   c += max(c.g - 0.5 * (c.r + c.b), 0.0) * vec3f(-0.2, -0.04, 0.22);
   c += max(min(c.r, c.g) - c.b, 0.0) * vec3f(0.38, -0.12, 0.12);
-  // A film's mean leans magenta once it is veiled; a touch of green in the balance keeps the pearl
-  // cream rather than mauve.
-  c *= vec3f(0.96, 1.08, 0.93);
+  // A veiled film's mean leans magenta (1.16, 0.88, 1.18 over the whole range). Rebalance toward a
+  // warm pearl, but leave the slowest light alone: the resting point stays ice.
+  c *= mix(vec3f(1.0), vec3f(0.93, 1.09, 0.88), smoothstep(0.0, 0.3, s) * (1.0 - 0.8 * defocus));
   // the haze of newcomers spans the whole spectrum, whose mean leans blue: warm it back to cream
   c *= mix(vec3f(1.0), vec3f(1.0, 1.08, 0.88), fresh);
   // glitter: a few grains catch the light
-  let glint = 1.0 + 0.7 * smoothstep(0.985, 1.0, phase);
+  let glint = 1.0 + 0.45 * smoothstep(0.985, 1.0, phase);
   // defocused near light spreads thin, so it is lifted to keep its bokeh disc visible
   let lift = 1.0 + 0.7 * clamp(-depth, 0.0, 1.0);
   let haze = 1.0 - 0.25 * clamp(depth, 0.0, 1.2);

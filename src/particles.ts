@@ -69,6 +69,8 @@ export class Particles {
   /** Set each frame by the engine from the framing measurement. */
   refSpeed = 0.3;
   equalise = 0;
+  radius = 0.8;
+  depthCue = 0;
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;
@@ -185,8 +187,8 @@ export class Particles {
       0,
     );
     const probe = this.extent.probe;
-    vec4(f, 40, probe[0], probe[1], probe[2], 0);
-    vec4(f, 44, this.refSpeed, this.equalise, DWELL_FLOOR, 0);
+    vec4(f, 40, probe[0], probe[1], probe[2], this.radius);
+    vec4(f, 44, this.refSpeed, this.equalise, DWELL_FLOOR, this.depthCue);
     const u = this.u32;
     u[48] = p.frame >>> 0;
     u[49] = this.count;

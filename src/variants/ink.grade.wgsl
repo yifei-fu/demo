@@ -5,7 +5,7 @@
 
 const INK_PAPER: vec3f = vec3f(0.863, 0.815, 0.738);    // #efe9df in linear light
 const INK_BLACK: vec3f = vec3f(0.0034, 0.0044, 0.0088); // dense sumi: cool, never quite neutral
-const INK_K: f32 = 3.2;
+const INK_K: f32 = 3.7;
 const INK_GAMMA: f32 = 0.68;   // < 1 opens up the thin washes; dense ink still saturates to black
 
 // ------------------------------------------------------------------ paper

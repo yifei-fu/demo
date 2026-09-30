@@ -24,6 +24,14 @@ fn prism_film(thickness: f32) -> vec3f {
   return max(vec3f(1.0) - PRISM_XYZ_TO_RGB * xyz / PRISM_WHITE, vec3f(0.0));
 }
 
+// The film as pearl: veiled with white, greens leaning to mint and yellows to peach, as in shade.
+fn prism_pearl(thickness: f32, veil: f32) -> vec3f {
+  var c = mix(vec3f(1.0), prism_film(thickness), veil);
+  c += max(c.g - 0.5 * (c.r + c.b), 0.0) * vec3f(-0.2, -0.04, 0.22);
+  c += max(min(c.r, c.g) - c.b, 0.0) * vec3f(0.38, -0.12, 0.12);
+  return c;
+}
+
 // The glint: light entering glass splits by wavelength. A hairline cross, no longer than a thumb-nail,
 // leaves the middle of the frame, where the resting point sits, white at the core and then blue,
 // green and red one after another as the ray disperses, inside a thin spectral ring. It draws only
@@ -54,7 +62,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   c = 0.18 * pow(max(c, vec3f(0.0)) / 0.18, vec3f(1.08));
   // cool the shadows
   let shadow = 1.0 - smoothstep(0.01, 0.25, y0);
-  c = mix(c, c * vec3f(0.92, 0.96, 1.14), shadow * 0.6);
+  c = mix(c, c * vec3f(0.97, 0.99, 1.07), shadow * 0.5);
   // pastel film keeps its chroma through AgX
   let y1 = prism_lum(c);
   c = max(mix(vec3f(y1), c, 1.22), vec3f(0.0));
@@ -62,7 +70,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // slowly across the frame (25 s is exactly 40 turns of the 1000 s clock).
   let octaves = 5.0 - log2(max(y1, 0.5));
   let d = 270.0 + 62.0 * clamp(octaves, 0.0, 6.0) + 26.0 * uv.x + 16.0 * uv.y + 20.0 * sin(6.2831853 * time / 25.0);
-  let veil = mix(vec3f(1.0), prism_film(d), 0.6);
+  let veil = prism_pearl(d, 0.6);
   let hi = smoothstep(0.35, 4.0, y1);
   c = mix(c, veil * (y1 + 0.5 * hi), hi * 0.85);
   // the glint

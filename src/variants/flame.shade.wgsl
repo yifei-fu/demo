@@ -42,13 +42,15 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   c = mix(c, vec3f(0.42, 0.10, 0.24), 0.3 * smoothstep(0.4, 1.4, far));
 
   // speed sets the burn: slow pile-ups smoulder, fast threads run hot
-  let burn = mix(0.7, 1.5, smoothstep(0.0, 0.8, s));
+  let burn = mix(0.6, 1.8, smoothstep(0.0, 0.8, s));
   // a particle that has come to rest has burned down into the one point: it ignites, and as the
   // point opens into a loop (Hopf) the star cools through orange to the crimson of a slow coal
   let star = 1.0 - smoothstep(0.02, 0.12, speed);
   c = mix(c, vec3f(1.7, 0.90, 0.33), star);
 
   // near light glows, far light fades
-  let depth_gain = exp(-0.25 * far) * (1.0 + 0.5 * glow) * (1.0 + 1.6 * spark);
+  // every ember glints a little differently, so out-of-focus discs are not one flat speckle
+  let glint = 0.6 + 0.8 * fract(phase * 13.7);
+  let depth_gain = exp(-0.25 * far) * (1.0 + 0.5 * glow) * (1.0 + 1.6 * spark) * glint;
   return c * mix(burn, 1.0, star) * depth_gain;
 }

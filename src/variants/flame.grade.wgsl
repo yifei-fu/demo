@@ -25,10 +25,10 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let warm = 1.0 - smoothstep(0.5, 1.0, c.b / max(c.r, 1e-4));
   c *= mix(vec3f(1.0), vec3f(1.0, 0.94, 0.30), warm);
   // dim warm light also cools to ember red rather than to brown
-  let cooling = (1.0 - smoothstep(0.03, 0.45, y)) * warm;
-  c *= mix(vec3f(1.0), vec3f(1.15, 0.66, 0.52), cooling);
+  let cooling = (1.0 - smoothstep(0.03, 0.40, y)) * warm;
+  c *= mix(vec3f(1.0), vec3f(1.12, 0.78, 0.60), cooling);
   // haze recedes, so that dark voids open between the bright threads
-  c *= mix(0.72, 1.0, smoothstep(0.02, 0.4, y));
+  c *= mix(0.78, 1.0, smoothstep(0.02, 0.4, y));
 
   // heat: a lot of light leans toward gold whatever its hue, so the single point is a star
   let heat = smoothstep(0.5, 9.0, y);
@@ -52,6 +52,6 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let k = FLAME_GAIN * c;
   var o = pow(k / (1.0 + k), vec3f(1.25));
   // the true core runs past white: a HDR display shows it brighter, an SDR one clamps
-  o += vec3f(1.0, 0.86, 0.62) * 0.5 * smoothstep(8.0, 50.0, y);
+  o += vec3f(1.0, 0.86, 0.62) * (0.5 + 0.6 * (axiom_headroom() - 1.0)) * smoothstep(8.0, 50.0, y);
   return o + FLAME_BLACK;
 }

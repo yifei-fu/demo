@@ -15,6 +15,8 @@ export const variant: Variant = {
     trail: 0.88,
     dof: 1,
     bloom: 7.5,
+    bloomTint: [1.0, 0.62, 0.34], // the halo of white-gold light burns orange-red, like film halation
+    clarity: 0.4,
     grain: 0.012,
     aberration: 0.003,
     finish: 'direct',

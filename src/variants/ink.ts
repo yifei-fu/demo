@@ -12,9 +12,12 @@ export const variant: Variant = {
   gradeWgsl,
   render: {
     exposure: 14,
-    trail: 0.9,
+    trail: 0.94,
     dof: 1.15,
     bloom: 4,
+    clarity: 0.7,
+    // the bleed around a dense core is warmer than the core itself: more blue is absorbed in the halo
+    bloomTint: [0.92, 1, 1.12],
     grain: 0.003,
     aberration: 0,
     finish: 'direct',
