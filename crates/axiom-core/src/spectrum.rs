@@ -7,8 +7,11 @@ use crate::rng::Rng;
 
 /// Regime-boundary tolerance (world units of exponent).
 pub const EPS: f64 = 0.01;
-/// Exponential forgetting time constant in world-time units.
+/// Exponential forgetting time constants in world-time units: the reported
+/// exponents track navigation (≈ 10 per the spec); dimension and regime need a
+/// longer memory to be steady.
 pub const FORGET: f64 = 10.0;
+pub const FORGET_SLOW: f64 = 40.0;
 /// Tangent vectors are re-orthonormalised at least this often (time units).
 const RENORM_DT: f64 = 0.05;
 /// Internal RK4 step for the world field.
@@ -57,41 +60,89 @@ fn rk4<S: System>(s: &S, st: &State, h: f64) -> State {
     o
 }
 
-/// Benettin's algorithm with optional exponential forgetting.
-///
-/// The per-interval growth rates are smoothed by two cascaded one-pole filters
-/// (each of time constant `forget / 2`). A single pole would leave an O(1/T)
-/// ripple in the flow-direction exponent of a limit cycle that is larger than
-/// the regime tolerance; the cascade suppresses it by another factor ~ω·T/2.
+/// Smoothing of the per-interval growth rates: two cascaded one-pole filters
+/// (each of time constant `forget / 2`), or a plain running mean when
+/// `forget == 0`. A single pole would leave an O(1/T) ripple in the
+/// flow-direction exponent of a limit cycle that is larger than the regime
+/// tolerance; the cascade suppresses it by another factor ~ω·T/2.
+#[derive(Clone, Copy)]
+struct Filter {
+    forget: f64,
+    e1: [f64; 3],
+    e2: [f64; 3],
+}
+
+impl Filter {
+    fn new(forget: f64) -> Self {
+        Filter {
+            forget,
+            e1: [0.0; 3],
+            e2: [0.0; 3],
+        }
+    }
+
+    /// `count` is the number of updates so far (including this one): early on
+    /// the filter is a running mean, so it starts unbiased.
+    fn update(&mut self, g: [f64; 3], dt: f64, count: u64) {
+        let running = 1.0 / count as f64;
+        let rate = if self.forget > 0.0 {
+            running.max(1.0 - (-dt / (0.5 * self.forget)).exp())
+        } else {
+            running
+        };
+        for (i, gi) in g.iter().enumerate() {
+            self.e1[i] += rate * (gi - self.e1[i]);
+            self.e2[i] += rate * (self.e1[i] - self.e2[i]);
+        }
+    }
+
+    fn value(&self) -> [f64; 3] {
+        let mut l = if self.forget > 0.0 { self.e2 } else { self.e1 };
+        l.sort_by(|a, b| b.total_cmp(a));
+        l
+    }
+}
+
+/// Benettin's algorithm: RK4 of the flow and three tangent vectors,
+/// re-orthonormalised (modified Gram–Schmidt) every 0.05 time units. The
+/// growth rates feed two `Filter`s with independent memory lengths so that
+/// callers can trade tracking speed against noise.
 #[derive(Clone)]
 pub struct Benettin {
     pub x: V3,
     q: [V3; 3],
-    /// Stage-1 / stage-2 filtered growth rates.
-    e1: [f64; 3],
-    e2: [f64; 3],
     count: u64,
     since: f64,
-    /// 0 = infinite memory (plain running mean).
-    forget: f64,
+    filters: [Filter; 2],
 }
 
 impl Benettin {
+    /// One memory length (0 = infinite memory, a plain running mean).
     pub fn new(x: V3, forget: f64) -> Self {
+        Benettin::with_memories(x, [forget, forget])
+    }
+
+    /// Two memory lengths; see `exponents` and `exponents_slow`.
+    pub fn with_memories(x: V3, forgets: [f64; 2]) -> Self {
         Benettin {
             x,
             q: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            e1: [0.0; 3],
-            e2: [0.0; 3],
             count: 0,
             since: 0.0,
-            forget,
+            filters: forgets.map(Filter::new),
         }
     }
 
     /// Restart the trajectory (keeps nothing of the old exponents).
     pub fn reset(&mut self, x: V3) {
-        *self = Benettin::new(x, self.forget);
+        *self = Benettin::with_memories(x, self.filters.map(|f| f.forget));
+    }
+
+    /// Forget the accumulated exponents but keep the (already aligned)
+    /// tangent frame, so a measurement starts without alignment bias.
+    pub fn restart_average(&mut self) {
+        self.filters = self.filters.map(|f| Filter::new(f.forget));
+        self.count = 0;
     }
 
     /// Integrate `steps` RK4 steps of size `dt`.
@@ -109,7 +160,7 @@ impl Benettin {
 
     fn renormalise(&mut self) {
         let mut g = [0.0; 3];
-        for i in 0..3 {
+        for (i, gi) in g.iter_mut().enumerate() {
             for j in 0..i {
                 let d = dot(self.q[i], self.q[j]);
                 for c in 0..3 {
@@ -120,27 +171,23 @@ impl Benettin {
             for c in 0..3 {
                 self.q[i][c] /= n;
             }
-            g[i] = n.ln() / self.since;
+            *gi = n.ln() / self.since;
         }
         self.count += 1;
-        let running = 1.0 / self.count as f64;
-        let rate = if self.forget > 0.0 {
-            running.max(1.0 - (-self.since / (0.5 * self.forget)).exp())
-        } else {
-            running
-        };
-        for i in 0..3 {
-            self.e1[i] += rate * (g[i] - self.e1[i]);
-            self.e2[i] += rate * (self.e1[i] - self.e2[i]);
+        for f in self.filters.iter_mut() {
+            f.update(g, self.since, self.count);
         }
         self.since = 0.0;
     }
 
-    /// Current exponent estimates, sorted descending.
+    /// Exponents with the first memory length, sorted descending.
     pub fn exponents(&self) -> [f64; 3] {
-        let mut l = if self.forget > 0.0 { self.e2 } else { self.e1 };
-        l.sort_by(|a, b| b.total_cmp(a));
-        l
+        self.filters[0].value()
+    }
+
+    /// Exponents with the second memory length, sorted descending.
+    pub fn exponents_slow(&self) -> [f64; 3] {
+        self.filters[1].value()
     }
 
     pub fn healthy(&self) -> bool {
@@ -149,11 +196,12 @@ impl Benettin {
     }
 }
 
-/// Kaplan–Yorke dimension of a descending spectrum. Exponents within `EPS`
-/// of zero are treated as zero so a cycle reads exactly 1 and a torus 2.
+/// Kaplan–Yorke dimension of a descending spectrum. The two leading exponents
+/// within `EPS` of zero are treated as zero so a cycle reads exactly 1 and a
+/// torus exactly 2.
 pub fn kaplan_yorke(l: [f64; 3]) -> f64 {
     let snap = |v: f64| if v.abs() <= EPS { 0.0 } else { v };
-    let l = [snap(l[0]), snap(l[1]), snap(l[2])];
+    let l = [snap(l[0]), snap(l[1]), l[2]];
     let mut sum = 0.0;
     let mut j = 0;
     for v in l {
@@ -188,10 +236,23 @@ pub fn regime(l: [f64; 3], d: f64) -> u8 {
     }
 }
 
+/// A tracer that has been this slow (world units per unit time) for a while is
+/// sitting on a fixed point, whatever the averaged exponents still remember.
+const REST_SPEED: f64 = 0.01;
+/// Time constant of the tracer-speed average.
+const SPEED_MEMORY: f64 = 2.0;
+
 /// The live spectrum tracker: one tracer particle in the world field.
+///
+/// Two memories run side by side. The reported exponents λ use the spec's
+/// `FORGET ≈ 10` so they follow navigation. The dimension and regime use the
+/// slower `FORGET_SLOW`: with the world normalised to ω ≈ 1.5 a loop lasts
+/// ~4 time units, so 10 units are only ~2.4 loops — too few for a cycle's
+/// exponent to settle inside the ±ε band, and the label would flicker.
 pub struct Spectrum {
     bet: Benettin,
     rng: Rng,
+    speed: f64,
 }
 
 impl Spectrum {
@@ -199,8 +260,9 @@ impl Spectrum {
         let mut rng = Rng::new(seed, 7);
         let x = rng.in_ball(0.6);
         Spectrum {
-            bet: Benettin::new(x, FORGET),
+            bet: Benettin::with_memories(x, [FORGET, FORGET_SLOW]),
             rng,
+            speed: 1.0,
         }
     }
 
@@ -211,23 +273,33 @@ impl Spectrum {
         }
         let steps = (world_time / WORLD_DT).ceil().clamp(1.0, 400.0) as usize;
         self.bet.advance(law, world_time / steps as f64, steps);
-        if !self.bet.healthy() {
+        if self.bet.healthy() {
+            let k = 1.0 - (-world_time / SPEED_MEMORY).exp();
+            self.speed += k * (norm(law.field(self.bet.x)) - self.speed);
+        } else {
             let x = self.rng.in_ball(0.6);
             self.bet.reset(x);
+            self.speed = 1.0;
         }
     }
 
     /// `[λ1, λ2, λ3, D, regime, x, y, z]`
     pub fn read(&self) -> [f32; 8] {
         let l = self.bet.exponents();
-        let d = kaplan_yorke(l);
+        let slow = self.bet.exponents_slow();
+        let (d, code) = if self.speed < REST_SPEED {
+            (0.0, FIXED)
+        } else {
+            let d = kaplan_yorke(slow);
+            (d, regime(slow, d))
+        };
         let x = self.bet.x;
         [
             l[0] as f32,
             l[1] as f32,
             l[2] as f32,
             d as f32,
-            regime(l, d) as f32,
+            code as f32,
             x[0] as f32,
             x[1] as f32,
             x[2] as f32,

@@ -3,7 +3,7 @@
 
 use crate::anchors::{self, dot, System, KIND_COUNT, M3, V3};
 use crate::rng::Rng;
-use crate::tables::{self, ANCHORS, KAPPA0};
+use crate::tables::{self, ANCHORS, KAPPA0, KAPPA_R};
 use std::f64::consts::TAU;
 
 pub const PARAMS_LEN: usize = 68;
@@ -12,7 +12,9 @@ const SLOT_LEN: usize = 32;
 pub const ANCHOR_COUNT: usize = ANCHORS.len();
 /// Confinement stiffness K and default radius R_c (§3.2).
 pub const K_CONFINE: f64 = 8.0;
-pub const CONFINE_RADIUS: f64 = 1.5;
+pub const CONFINE_RADIUS: f64 = 1.2;
+/// Fraction of the arc between two neighbouring anchors over which they mix.
+pub const BLEND_WIDTH: f64 = 0.4;
 
 /// One active anchor in world space: `x_sys = c + L · R · x`.
 #[derive(Clone, Copy, Debug)]
@@ -130,10 +132,10 @@ impl System for Law {
             let jk = anchors::jac(s.kind, &s.p, xs);
             let g = s.weight * s.tau;
             // (Rᵀ Jk R)_{ab} = col_a · (Jk col_b)
-            for b in 0..3 {
-                let jc = anchors::mat_vec(&jk, s.cols[b]);
-                for a in 0..3 {
-                    j[a][b] += g * dot(s.cols[a], jc);
+            for (b, col_b) in s.cols.iter().enumerate() {
+                let jc = anchors::mat_vec(&jk, *col_b);
+                for (row, col_a) in j.iter_mut().zip(&s.cols) {
+                    row[b] += g * dot(*col_a, jc);
                 }
             }
         }
@@ -178,10 +180,11 @@ impl Placement {
         Placement { theta0, order, rot }
     }
 
-    /// Rim angle of a kind (radians, in [0, 2π)).
-    pub fn angle_of(&self, kind: usize) -> f64 {
-        let i = self.order.iter().position(|&k| k == kind).unwrap_or(0);
-        (self.theta0 + TAU * i as f64 / ANCHOR_COUNT as f64).rem_euclid(TAU)
+    /// Rim angle of a kind (radians, in [0, 2π)); `None` for a kind that has
+    /// no anchor.
+    pub fn angle_of(&self, kind: usize) -> Option<f64> {
+        let i = self.order.iter().position(|&k| k == kind)?;
+        Some((self.theta0 + TAU * i as f64 / ANCHOR_COUNT as f64).rem_euclid(TAU))
     }
 
     /// The two active `(kind, weight)` pairs at angle `theta`.
@@ -189,7 +192,9 @@ impl Placement {
         let seg = TAU / ANCHOR_COUNT as f64;
         let a = (theta - self.theta0).rem_euclid(TAU) / seg;
         let i = (a.floor() as usize).min(ANCHOR_COUNT - 1);
-        let s = smootherstep(a - i as f64);
+        // Anchors dominate the outer part of their arcs; the two only mix in the
+        // middle `BLEND_WIDTH` of the arc between them.
+        let s = smootherstep(((a - i as f64) - 0.5) / BLEND_WIDTH + 0.5);
         [
             (self.order[i], 1.0 - s),
             (self.order[(i + 1) % ANCHOR_COUNT], s),
@@ -247,9 +252,12 @@ fn quat_columns(w: f64, [x, y, z]: V3) -> [V3; 3] {
     ]
 }
 
-/// Centre damping κ(r): mostly nonzero only near the centre.
+/// Centre damping κ(r) = κ0 (1 − r/r_κ)² for r < r_κ, else 0. It is what
+/// makes r = 0 a stable fixed point for *every* blend of anchors: rotating and
+/// mixing non-normal Jacobians can destabilise them, but a κ larger than every
+/// anchor's largest symmetric-part eigenvalue cannot be beaten.
 pub fn kappa(r: f64) -> f64 {
-    KAPPA0 * (1.0 - r).powi(2)
+    KAPPA0 * (1.0 - r / KAPPA_R).max(0.0).powi(2)
 }
 
 /// Fill one 32-float slot.
@@ -293,9 +301,15 @@ pub fn write_params(u: f32, v: f32, seed: u32, out: &mut [f32]) {
     }
 }
 
-/// A single anchor, unrotated, at weight 1 — used to inspect a pure route.
+/// A single anchor, unrotated, at weight 1, with the standard κ(r): the
+/// pure route, for inspecting an anchor without any blending.
 pub fn pure_law(kind: usize, r: f64) -> Law {
-    let s = tables::sample(kind, r);
+    pure_law_with(kind, r, &tables::sample(kind, r), kappa(r))
+}
+
+/// Same from an explicit route sample and damping (the calibration tool
+/// checks rows it has not saved yet).
+pub fn pure_law_with(kind: usize, r: f64, s: &tables::Sample, kappa: f64) -> Law {
     let mut p = [0.0; 8];
     for (d, v) in p.iter_mut().zip(s.p) {
         *d = v as f64;
@@ -303,7 +317,7 @@ pub fn pure_law(kind: usize, r: f64) -> Law {
     Law {
         r,
         theta: 0.0,
-        kappa: kappa(r),
+        kappa,
         confine: CONFINE_RADIUS,
         slots: [
             Some(Slot {
@@ -311,7 +325,7 @@ pub fn pure_law(kind: usize, r: f64) -> Law {
                 weight: 1.0,
                 tau: s.tau as f64,
                 l: s.l as f64,
-                c: [s.c[0] as f64, s.c[1] as f64, s.c[2] as f64],
+                c: s.c.map(|v| v as f64),
                 omega: s.omega as f64,
                 p,
                 cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
