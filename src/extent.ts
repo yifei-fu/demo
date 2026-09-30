@@ -1,28 +1,36 @@
 /**
  * Where the attractor is and how big: the particle kernel sums a sparse sample of settled
- * particles into a tiny buffer, and this reads it back asynchronously (never stalling a frame).
+ * particles into a tiny buffer (their positions, and a histogram of their distance from the last
+ * known centre), and this reads it back asynchronously, never stalling a frame. The size is a
+ * high percentile of the distance rather than an RMS, so the thin halo of particles still on
+ * their way onto a slowly attracting cycle does not inflate it.
  */
 
-const WORDS = 8;
+const HIST_BINS = 32;
+const HIST_RANGE = 2;
+const WORDS = 4 + HIST_BINS;
 const BYTES = WORDS * 4;
 const POS_FIXED = 16384;
-const SQ_FIXED = 4096;
 const MIN_SAMPLES = 96;
+/** Fraction of the sample the reported radius must enclose. */
+const PERCENTILE = 0.9;
 
 export interface Extent {
   /** centroid of the settled particles */
   center: [number, number, number];
-  /** root-mean-square distance from the centroid */
-  rms: number;
+  /** radius around the centroid that encloses PERCENTILE of them */
+  radius: number;
 }
 
 export class ExtentProbe {
   readonly buffer: GPUBuffer;
+  /** The centre the histogram is measured from; the kernel reads it, the latest measurement moves it. */
+  readonly probe: [number, number, number] = [0, 0, 0];
   private readonly readBuf: GPUBuffer;
   private pending: Promise<void> | null = null;
   private wanted = false;
   private latest: Extent | null = null;
-  private readonly out: Extent = { center: [0, 0, 0], rms: 0 };
+  private readonly out: Extent = { center: [0, 0, 0], radius: 0 };
 
   constructor(device: GPUDevice) {
     this.buffer = device.createBuffer({
@@ -67,20 +75,33 @@ export class ExtentProbe {
       .then(() => {
         const w = new Int32Array(this.readBuf.getMappedRange().slice(0));
         this.readBuf.unmap();
-        const n = w[0];
-        if (n >= MIN_SAMPLES) {
-          const c = this.out.center;
-          c[0] = w[1] / n / POS_FIXED;
-          c[1] = w[2] / n / POS_FIXED;
-          c[2] = w[3] / n / POS_FIXED;
-          const mean2 = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
-          this.out.rms = Math.sqrt(Math.max(0, (w[4] >>> 0) / n / SQ_FIXED - mean2));
-          this.latest = this.out;
-        }
+        this.decode(w);
       })
       .catch(() => undefined)
       .finally(() => {
         this.pending = null;
       });
+  }
+
+  private decode(w: Int32Array): void {
+    const n = w[0];
+    if (n < MIN_SAMPLES) return;
+    const c = this.out.center;
+    c[0] = w[1] / n / POS_FIXED;
+    c[1] = w[2] / n / POS_FIXED;
+    c[2] = w[3] / n / POS_FIXED;
+
+    const target = PERCENTILE * n;
+    let seen = 0;
+    let bin = 0;
+    while (bin < HIST_BINS - 1 && seen + w[4 + bin] < target) seen += w[4 + bin++];
+    const inBin = w[4 + bin] || 1;
+    this.out.radius = ((bin + (target - seen) / inBin) * HIST_RANGE) / HIST_BINS;
+
+    // the next histogram is measured from where the cloud actually is
+    this.probe[0] = c[0];
+    this.probe[1] = c[1];
+    this.probe[2] = c[2];
+    this.latest = this.out;
   }
 }

@@ -9,7 +9,7 @@ import type { Variant } from './variants/types';
 
 const WORKGROUP = 64;
 const MAX_GROUPS_X = 65535;
-const FRAME_FLOATS = 44; // 11 vec4
+const FRAME_FLOATS = 48; // 12 vec4
 const FLAG_INIT = 1;
 const FLAG_SPLAT = 2;
 const SHAKE_DECAY = 3.2; // 1/s
@@ -19,7 +19,7 @@ const NEAR = 0.03;
 const MAX_SUBSTEP_DT = 0.03; // world time; keeps RK2 accurate on a fast law at low fps
 const MAX_SUBSTEPS = 4;
 /** About this many particles feed the extent measurement each frame. */
-const EXTENT_SAMPLES = 12288;
+const EXTENT_SAMPLES = 2048;
 const TAN_HALF = 0.31;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
@@ -179,11 +179,13 @@ export class Particles {
       Math.max(1, Math.floor(this.count / EXTENT_SAMPLES)),
       0,
     );
+    const probe = this.extent.probe;
+    vec4(f, 40, probe[0], probe[1], probe[2], 0);
     const u = this.u32;
-    u[40] = p.frame >>> 0;
-    u[41] = this.count;
-    u[42] = this.seed;
-    u[43] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
+    u[44] = p.frame >>> 0;
+    u[45] = this.count;
+    u[46] = this.seed;
+    u[47] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);

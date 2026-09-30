@@ -35,9 +35,9 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let y1 = prism_lum(c);
   c = max(mix(vec3f(y1), c, 1.22), vec3f(0.0));
   // Highlights: an iridescent white. The film thins toward the brightest light; the tint drifts
-  // slowly across the frame (50 s is exactly 20 turns of the 1000 s clock).
+  // slowly across the frame (25 s is exactly 40 turns of the 1000 s clock).
   let octaves = 5.0 - log2(max(y1, 0.5));
-  let d = 270.0 + 85.0 * clamp(octaves, 0.0, 6.0) + 26.0 * uv.x + 16.0 * uv.y + 8.0 * sin(6.2831853 * time / 50.0);
+  let d = 270.0 + 85.0 * clamp(octaves, 0.0, 6.0) + 26.0 * uv.x + 16.0 * uv.y + 20.0 * sin(6.2831853 * time / 25.0);
   let veil = mix(vec3f(1.0), prism_film(d), 0.85);
   let hi = smoothstep(0.35, 4.0, y1);
   c = mix(c, veil * (y1 + 0.5 * hi), hi * 0.85);

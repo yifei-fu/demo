@@ -44,8 +44,11 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let d = 275.0 + 330.0 * s + 110.0 * z + 24.0 * (phase - 0.5) + 60.0 * (seed - 0.5);
   var c = prism_film(clamp(d, 190.0, 900.0));
   // pastel: a veil of white, then even out the luminance so no hue is a dark gap in a filament
-  c = mix(vec3f(1.0), c, 0.66);
+  c = mix(vec3f(1.0), c, 0.62);
   c = c / mix(1.0, max(prism_luma(c), 0.2), 0.85);
+  // keep the palette to pearl, not acid: greens lean to mint and aqua, yellows to peach and cream
+  c += max(c.g - 0.5 * (c.r + c.b), 0.0) * vec3f(-0.22, -0.08, 0.55);
+  c += max(min(c.r, c.g) - c.b, 0.0) * vec3f(0.35, -0.12, 0.30);
   // glitter: a few grains catch the light
   let glint = 1.0 + 1.2 * smoothstep(0.97, 1.0, phase);
   // defocused near light spreads thin, so it is lifted to keep its bokeh disc visible

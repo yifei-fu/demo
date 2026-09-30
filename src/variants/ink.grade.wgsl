@@ -60,7 +60,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // paper: an uneven wash, kozo fibres, a faint fall-off toward the corners
   let wash = ink_vnoise(p * 0.0035) * 0.6 + ink_vnoise(p * 0.011 + 7.0) * 0.4 - 0.5;
   let fibres = ink_fibres(p);  // -1 dark .. +1 pale
-  let grainy = ink_vnoise(p * 0.9) * 0.55 + ink_vnoise(p * 2.3 + 3.0) * 0.45;
+  let grainy = ink_vnoise(p * 0.42) * 0.6 + ink_vnoise(p * 1.15 + 3.0) * 0.4;
   let d = uv - 0.5;
   let r2 = dot(d, d) * 2.0;
   var paper = INK_PAPER;
@@ -78,7 +78,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   mg *= 0.35 + 0.65 * smoothstep(0.08, 0.35, mg);
   let dry = 1.0 - smoothstep(0.05, 0.9, mg);
   let tooth = clamp(grainy * 0.8 - fibres * 0.25, 0.0, 1.0);
-  let feel = 1.0 + dry * 1.6 * (tooth - 0.5);
+  let feel = 1.0 + dry * 1.1 * (tooth - 0.5);
   let warm = vec3f(0.93, 1.00, 1.10);
   let cool = vec3f(1.10, 1.00, 0.86);
   let spectrum = mix(warm, cool, smoothstep(0.20, 1.6, mg));

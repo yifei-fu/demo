@@ -12,8 +12,10 @@ import type { Core, SpectrumReading } from './wasm';
 
 const STIR_STRENGTH = 1;
 /** Simulated seconds run at load, before the first frame is drawn. */
-const WARMUP_SECONDS = 9;
-const WARMUP_DT = 0.05;
+const WARMUP_SECONDS = 7;
+const WARMUP_DT = 0.06;
+/** Wall-clock cap, so a slow device opens partly warmed instead of waiting. */
+const WARMUP_BUDGET_MS = 4000;
 /** Frames between extent readbacks. */
 const EXTENT_EVERY = 6;
 /** Diving magnifies the cloud; density is lifted by (default distance / distance)^p, capped. */
@@ -208,7 +210,8 @@ export class Engine {
    * fallen into its attractor, with the inward streams in full flow, rather than a random ball.
    */
   async warmUp(seconds = WARMUP_SECONDS): Promise<void> {
-    for (let t = 0; t < seconds; t += WARMUP_DT) {
+    const start = performance.now();
+    for (let t = 0; t < seconds && performance.now() - start < WARMUP_BUDGET_MS; t += WARMUP_DT) {
       this.advance(WARMUP_DT, false);
       await this.extentLanded();
     }

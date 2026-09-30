@@ -81,7 +81,8 @@ async function boot(): Promise<void> {
   );
   void gpu.lost.then((reason) => hud.showLost(reason));
 
-  await engine.warmUp();
+  // tests drive the simulation themselves; everyone else opens on a cloud already in flow
+  if (!flags.capture) await engine.warmUp();
 
   if (flags.skipintro) {
     engine.sensors.arm();

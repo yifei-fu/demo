@@ -50,7 +50,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
 
   // shadows lean toward teal-blue; chroma is pushed out ahead of the tonemap
   let deep = 1.0 - smoothstep(0.0, 0.6, y);
-  c *= mix(vec3f(1.0), vec3f(0.70, 0.98, 1.22), 0.55 * deep);
+  c *= mix(vec3f(1.0), vec3f(0.76, 0.97, 1.12), 0.55 * deep);
   c = max(mix(vec3f(abyss_luma(c)), c, 1.32), vec3f(0.0));
   // whatever burns hot burns aqua-white, the colour of a real flash in the water, not blue or grey
   let m = max(c.r, max(c.g, c.b));

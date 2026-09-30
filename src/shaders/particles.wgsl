@@ -13,6 +13,7 @@ struct Frame {
   stir: vec4f,    // touch ndc x, y, strength, unused
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
+  probe: vec4f,   // xyz: centre the extent histogram is measured from
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -38,9 +39,11 @@ const TRACER_FRACTION: f32 = 0.0016;
 const TRACER_WEIGHT: f32 = 5.0;
 const TAIL_STEPS: i32 = 14;
 const TAIL_DT: f32 = 0.04;           // world time between tail samples (a 0.55 s tail)
-// The attractor's extent is measured on a sample of settled particles, in fixed point.
+// The attractor's extent is measured on a sparse sample of settled particles: the sum of their
+// positions (fixed point) and a histogram of their distance from the last known centre.
 const POS_FIXED: f32 = 16384.0;
-const SQ_FIXED: f32 = 4096.0;
+const HIST_BINS: u32 = 32u;
+const HIST_RANGE: f32 = 2.0;
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
 
 fn pcg(v: u32) -> u32 {
@@ -154,7 +157,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   }
   parts[i] = vec4f(p, born);
 
-  // extent: a sparse sample of settled particles, summed for the host (centre and RMS radius)
+  // extent: see HIST_BINS
   let stride = u32(F.misc.z);
   if (!init && age > SETTLED_END && i % stride == 0u) {
     let f = vec3i(round(p * POS_FIXED));
@@ -162,7 +165,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     atomicAdd(&extent[1], bitcast<u32>(f.x));
     atomicAdd(&extent[2], bitcast<u32>(f.y));
     atomicAdd(&extent[3], bitcast<u32>(f.z));
-    atomicAdd(&extent[4], u32(dot(p, p) * SQ_FIXED));
+    let bin = min(u32(length(p - F.probe.xyz) * (f32(HIST_BINS) / HIST_RANGE)), HIST_BINS - 1u);
+    atomicAdd(&extent[4u + bin], 1u);
   }
 
   if ((F.ids.w & 2u) == 0u) { return; }

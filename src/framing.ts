@@ -5,12 +5,12 @@
  */
 import type { Extent } from './extent';
 
-/** RMS radius (world units) that fills FILL of the short side at the default distance. */
-const RMS_AT_UNITY = 0.42;
+/** Radius (world units, 90th percentile) that fills about 75 % of the short side at the default distance. */
+const RADIUS_AT_UNITY = 0.8;
 const SCALE_MIN = 0.8;
 const SCALE_MAX = 1.7;
-/** Below this RMS radius the cloud is a point: hold the default framing. */
-const POINT_RMS = 0.05;
+/** Below this radius the cloud is a point: hold the default framing. */
+const POINT_RADIUS = 0.05;
 const POINT_FULL = 0.22;
 const TAU_SIZE = 2;
 const TAU_CENTER = 3;
@@ -27,7 +27,7 @@ export class Framing {
   readonly center: [number, number, number] = [0, 0, 0];
   /** multiplier on the default camera distance */
   scale = 1;
-  private rms = 0;
+  private radius = 0;
   private logScale = 0;
 
   update(measured: Extent | null, dt: number): void {
@@ -36,9 +36,9 @@ export class Framing {
     for (let i = 0; i < 3; i++)
       this.center[i] += (measured.center[i] * CENTER_FOLLOW - this.center[i]) * kc;
 
-    this.rms += (measured.rms - this.rms) * (1 - Math.exp(-dt / TAU_SIZE));
-    const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, this.rms / RMS_AT_UNITY));
-    const target = Math.log(fit) * smoothstep(POINT_RMS, POINT_FULL, this.rms);
+    this.radius += (measured.radius - this.radius) * (1 - Math.exp(-dt / TAU_SIZE));
+    const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, this.radius / RADIUS_AT_UNITY));
+    const target = Math.log(fit) * smoothstep(POINT_RADIUS, POINT_FULL, this.radius);
     const step = MAX_LOG_RATE * dt;
     this.logScale += Math.min(step, Math.max(-step, target - this.logScale));
     this.scale = Math.exp(this.logScale);
