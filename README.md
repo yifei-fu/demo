@@ -15,8 +15,8 @@ laws blend continuously. What you see is the attractor, and its dimension is wha
   piece opens here: the axiom.
 - **outward**: a Hopf bifurcation gives a loop (D = 1), then a torus (D = 2), then strange
   attractors (D ≈ 2 to 2.3), and at the rim near-volume-filling labyrinth chaos (D → 3).
-- **around the circle**: the character of the law changes. Thomas, Aizawa, Lorenz, Rössler and
-  Halvorsen anchors sit on the rim and are blended as a homotopy of vector fields.
+- **around the circle**: the character of the law changes. Thomas, Lorenz, Aizawa and Rössler
+  anchors sit on the rim in that cyclic order and are blended as a homotopy of vector fields.
 
 There is no timeline. Changing the law makes the cloud flow into the new attractor, so the
 transitions are the dynamics. After about 20 s without input an idle autopilot drifts the bead,

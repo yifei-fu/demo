@@ -6,7 +6,7 @@ import shadeWgsl from './flame.shade.wgsl?raw';
 export const variant: Variant = {
   id: 'flame',
   order: 2,
-  name: 'flame',
+  name: 'Flame',
   tagline: 'the heat of chaos',
   shadeWgsl,
   gradeWgsl,
