@@ -377,9 +377,13 @@ fn presets_are_level_matched_to_flame() {
             (m - mean).abs() <= 1.5,
             "{name}: {m:.1} dB against Flame's {mean:.1} dB"
         );
+        // Segment by segment the voices differ more: the labyrinth, whose
+        // near-conservative Thomas flow wanders slowly, is where the
+        // continuous voices are quietest (Flame −24 dB), while Ink's notes are
+        // rate-compensated to stay present (−20 dB).
         for (i, (l, r)) in levels.iter().zip(&reference).enumerate() {
             assert!(
-                (l - r).abs() <= 3.5,
+                (l - r).abs() <= 4.5,
                 "{name} in {}: {l:.1} dB against {r:.1} dB",
                 SEGMENTS[ACTIVE][i].0
             );

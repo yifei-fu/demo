@@ -334,11 +334,24 @@ fn solve_route(spec: &Spec) -> Vec<Row> {
         };
         let want: Vec<f64> = rows
             .iter()
-            .map(|r| (r.r99 / target(r.r)).max(spec.l_min))
+            .map(|r| (r.r99 / target(r.r)).max(spec.l_min).min(spec.l_max))
             .collect();
         for i in 0..rows.len() {
             let (a, b) = (want[i.saturating_sub(1)], want[(i + 1).min(rows.len() - 1)]);
             rows[i].l = 0.25 * a + 0.5 * want[i] + 0.25 * b;
+        }
+        // Between rows L is interpolated linearly and must not jump: at most
+        // `L_SLEW` (relative) per 0.0025 of r, which is what the smoothness
+        // test allows. A route that shrinks an attractor's damping fast makes
+        // it grow fast in system units, and L then lags behind it a little.
+        const L_SLEW: f64 = 0.027;
+        for i in 1..rows.len() {
+            let cap = L_SLEW * (rows[i].r - rows[i - 1].r) / 0.0025;
+            rows[i].l = rows[i].l.min(rows[i - 1].l * (1.0 + cap));
+        }
+        for i in (0..rows.len() - 1).rev() {
+            let cap = L_SLEW * (rows[i + 1].r - rows[i].r) / 0.0025;
+            rows[i].l = rows[i].l.min(rows[i + 1].l * (1.0 + cap));
         }
         // τ: ω_world = 1.5, unless that leaves the particles too slow.
         for row in rows.iter_mut() {

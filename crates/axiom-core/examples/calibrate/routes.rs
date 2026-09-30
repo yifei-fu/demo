@@ -27,6 +27,10 @@ pub struct Spec {
     pub rows: Vec<(f64, Vec<f64>)>,
     /// Smallest allowed L (keeps early, tiny attractors small in the world).
     pub l_min: f64,
+    /// Largest allowed L. A nearly conservative flow (Thomas at b ~ 0.003) has
+    /// no natural size, its cloud spreads over dozens of lattice cells; the
+    /// confinement wall clips it instead of L growing with it.
+    pub l_max: f64,
     /// L at r = 0, ramping to the first oscillating row. Keeps the unit ball
     /// (where particles start) inside the fixed point's basin of attraction.
     pub l_start: f64,
@@ -51,6 +55,16 @@ pub fn all() -> Vec<Spec> {
     vec![
         Spec {
             kind: THOMAS,
+            // The labyrinth wants b as small as the route can take it, and not
+            // for the sake of D: the density of a particle cloud in this
+            // nearly conservative, lattice-periodic flow is imprinted with the
+            // lattice ("the weave", see tests/weave.rs), and that grows with b
+            // (2.4% at b = 0.008, 4% at 0.011, 0.3% at 0.003) as dissipation
+            // herds the cloud onto a structured set. D_KY stays near 2.9 from
+            // b = 0.0015 to 0.004, so the rim runs down to 0.0025 by r = 0.88.
+            // The attractor then has no natural size (it spreads over dozens
+            // of lattice cells): L is capped, the wall clips it, and τ is
+            // raised to keep it moving.
             rows: rows(&[
                 (0.00, &[1.5]),
                 (0.08, &[1.25]),
@@ -65,18 +79,21 @@ pub fn all() -> Vec<Spec> {
                 (0.60, &[0.12]),
                 (0.66, &[0.09]),
                 (0.72, &[0.045]),
-                (0.78, &[0.022]),
-                (0.82, &[0.010]),
-                (0.86, &[0.0045]),
-                (0.90, &[0.0030]),
-                (0.95, &[0.0028]),
+                (0.74, &[0.031]),
+                (0.76, &[0.022]),
+                (0.79, &[0.009]),
+                (0.82, &[0.0045]),
+                (0.85, &[0.0031]),
+                (0.88, &[0.0027]),
+                (0.94, &[0.0025]),
                 (1.00, &[0.0025]),
             ]),
             l_min: 5.0,
+            l_max: 34.0,
             l_start: 5.0,
-            tau_cap: 9.0,
+            tau_cap: 14.0,
             r99: 0.8,
-            r99_rim: 1.6,
+            r99_rim: 1.3,
             min_speed: 0.45,
             centre: Centre::Zero,
         },
@@ -101,6 +118,7 @@ pub fn all() -> Vec<Spec> {
                 (1.00, &[1.1, 0.7, 0.7, 3.5, 0.25, 0.1]),
             ]),
             l_min: 1.7,
+            l_max: 1.0e9,
             l_start: 1.7,
             tau_cap: 4.0,
             r99: 0.8,
@@ -127,6 +145,7 @@ pub fn all() -> Vec<Spec> {
                 (1.00, &[10.0, 34.0, 8.0 / 3.0]),
             ]),
             l_min: 20.0,
+            l_max: 1.0e9,
             l_start: 20.0,
             tau_cap: 0.6,
             r99: 0.8,
@@ -154,6 +173,7 @@ pub fn all() -> Vec<Spec> {
                 (1.00, &[0.2, 0.2, 5.7]),
             ]),
             l_min: 8.0,
+            l_max: 1.0e9,
             l_start: 8.0,
             tau_cap: 2.0,
             r99: 1.0,

@@ -334,7 +334,7 @@ impl Synth {
     /// Install a 68-float `LawParams` block.
     pub fn set_law(&mut self, block: &[f32]) {
         self.law = Law::from_block(block);
-        self.omega_target = self.law.omega().clamp(0.3, 6.0);
+        self.omega_target = self.law.omega().clamp(0.3, 9.0);
     }
 
     /// `synth_set` ids: 0 master · 1 stir · 2 dive · 3 shake · 4 preset ·

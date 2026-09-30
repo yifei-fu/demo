@@ -323,6 +323,14 @@ preset 3 is removed from the crate. The engine also exposes two smoothed reading
 Variants can use these to gate regime-specific touches, for example a centre glint only on the
 still point, or clarity only in volume-filling chaos.
 
+**Round 6: the labyrinth weave.** Near the rim, the nearly conservative Thomas flow printed a
+lattice-periodic density "weave" onto the labyrinth, with wave vectors 2(±1,0,1), 2(0,±1,1) and
+2(1,±1,0). The weave comes from dissipation herding the cloud, so it grows *with* b. The rim
+route now descends to b = 0.0025, with L up to 34 and τ up to 12.7. Measured weave amplitude
+drops from 2.4–3.9 % to the sampling-noise floor, and D_KY at r ≥ 0.9 rises from 2.8 to about
+2.9. `tests/weave.rs` guards both, and includes a check that the measurement still sees the old
+weave.
+
 ---
 
 ## 8. Round-2 module interfaces

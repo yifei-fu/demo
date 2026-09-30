@@ -8,7 +8,7 @@
 //! projected onto Fourier modes of the *system* lattice: for a wave vector `k`
 //! the density is `ρ = ρ₀ (1 + m cos(k·x_sys + φ))` with `m = 2 |⟨e^{i k·x_sys}⟩|`.
 
-use axiom_core::anchors::{rk4, V3};
+use axiom_core::anchors::{rk4, THOMAS, V3};
 use axiom_core::law::Law;
 use std::f64::consts::TAU;
 
@@ -52,7 +52,12 @@ pub fn ball_point(i: u64, radius: f64) -> V3 {
 /// world time, from `n` particles started uniformly in the ball of radius
 /// `radius` (RK4, step `dt`, on four threads).
 pub fn amplitudes(law: &Law, modes: &[V3], n: usize, radius: f64, secs: f64, dt: f64) -> Vec<f64> {
-    let slot = law.slots[0].expect("a law with a Thomas slot");
+    let slot = law
+        .slots
+        .iter()
+        .flatten()
+        .find(|s| s.kind == THOMAS)
+        .expect("a law with a Thomas slot");
     let steps = (secs / dt).round() as usize;
     let threads = 4;
     let chunk = n.div_ceil(threads);
@@ -83,11 +88,15 @@ pub fn amplitudes(law: &Law, modes: &[V3], n: usize, radius: f64, secs: f64, dt:
                 })
             })
             .collect();
-        jobs.into_iter().map(|j| j.join().expect("particles")).collect()
+        jobs.into_iter()
+            .map(|j| j.join().expect("particles"))
+            .collect()
     });
     (0..modes.len())
         .map(|m| {
-            let (re, im) = sums.iter().fold((0.0, 0.0), |(a, b), s| (a + s[m].0, b + s[m].1));
+            let (re, im) = sums
+                .iter()
+                .fold((0.0, 0.0), |(a, b), s| (a + s[m].0, b + s[m].1));
             2.0 * (re * re + im * im).sqrt() / n as f64
         })
         .collect()
@@ -98,7 +107,10 @@ pub fn amplitudes(law: &Law, modes: &[V3], n: usize, radius: f64, secs: f64, dt:
 pub fn control_modes(len: f64, count: usize) -> Vec<V3> {
     (0..count)
         .map(|i| {
-            let (u, v) = (radical_inverse(i as u64 + 7, 7), radical_inverse(i as u64 + 7, 11));
+            let (u, v) = (
+                radical_inverse(i as u64 + 7, 7),
+                radical_inverse(i as u64 + 7, 11),
+            );
             let cos = 2.0 * u - 1.0;
             let sin = (1.0 - cos * cos).sqrt();
             let phi = TAU * v;
@@ -118,12 +130,16 @@ pub struct Weave {
     pub amplitude: f64,
 }
 
-/// The weave of `law` (whose slot 0 is Thomas) after `secs` of world time, from
+/// The weave of `law` (one of whose slots is Thomas) after `secs` of world time, from
 /// `n` particles started uniformly in the ball of radius `radius`, integrated
 /// with RK4 at step `dt` on four threads.
 pub fn weave(law: &Law, n: usize, radius: f64, secs: f64, dt: f64) -> Weave {
     let controls = control_modes(2.0 * 2f64.sqrt(), 30);
-    let all: Vec<V3> = MODES.iter().copied().chain(controls.iter().copied()).collect();
+    let all: Vec<V3> = MODES
+        .iter()
+        .copied()
+        .chain(controls.iter().copied())
+        .collect();
     let m = amplitudes(law, &all, n, radius, secs, dt);
     let (lattice, control) = m.split_at(MODES.len());
     let mean_sq = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64;
