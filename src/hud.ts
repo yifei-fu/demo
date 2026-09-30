@@ -13,13 +13,13 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
-export interface HudCallbacks {
+interface HudCallbacks {
   /** Runs synchronously inside the Begin tap: the only place permissions may be requested. */
   onBegin: () => void;
   onMute: (muted: boolean) => void;
 }
 
-export interface HudOptions {
+interface HudOptions {
   debug: boolean;
   perf: boolean;
   gate: boolean;

@@ -80,9 +80,8 @@ export class ExtentProbe {
     this.pending = this.readBuf
       .mapAsync(GPUMapMode.READ)
       .then(() => {
-        const w = new Int32Array(this.readBuf.getMappedRange().slice(0));
+        this.decode(new Int32Array(this.readBuf.getMappedRange()));
         this.readBuf.unmap();
-        this.decode(w);
       })
       .catch(() => undefined)
       .finally(() => {

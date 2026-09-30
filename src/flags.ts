@@ -3,7 +3,7 @@ import type { GpuOptions } from './gpu';
 
 const MAX_PARTICLES = 4_000_000;
 
-export interface Flags {
+interface Flags {
   seed: number;
   variant: string | null;
   n: number | null;

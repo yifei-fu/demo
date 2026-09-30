@@ -10,10 +10,15 @@ const IDLE_SECONDS = 20;
 const AUTOPILOT_RAMP = 6;
 
 export const DIST_FAR = 3.2;
-export const DIST_NEAR = 0.25;
+const DIST_NEAR = 0.25;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 const smoothstep = (t: number): number => t * t * (3 - 2 * t);
+const set3 = (v: number[], x: number, y: number, z: number): void => {
+  v[0] = x;
+  v[1] = y;
+  v[2] = z;
+};
 
 /** Rolling-ball physics with a soft rim, and a slow wandering autopilot when nobody is there. */
 export class Bead {
@@ -165,9 +170,9 @@ export class CameraRig {
   update(
     input: Input,
     dt: number,
-    recede = 0,
-    look: readonly [number, number, number] = [0, 0, 0],
-    fit = 1,
+    recede: number,
+    look: readonly [number, number, number],
+    fit: number,
   ): CameraState {
     this.time += dt;
     const target = Math.max(input.dive, input.hold ? 1 : 0);
@@ -186,36 +191,29 @@ export class CameraRig {
     const az = input.yaw + input.orbitYaw + drift;
     const pitch = clamp(0.2 + input.orbitPitch + input.parallax[1] * 0.03, -1.35, 1.35);
 
+    // Holographic parallax: slide the eye sideways/up a little while still looking at the target.
+    // (Plain scalars throughout: this runs every frame and must not allocate.)
     const cp = Math.cos(pitch);
-    const base: [number, number, number] = [
-      Math.sin(az) * cp * dist,
-      Math.sin(pitch) * dist,
-      Math.cos(az) * cp * dist,
-    ];
-    // holographic parallax: slide the eye sideways/up a little while still looking at the target
     const rx = Math.cos(az);
     const rz = -Math.sin(az);
     const par = dist * 0.09;
-    const eye: [number, number, number] = [
-      base[0] + rx * input.parallax[0] * par,
-      base[1] + input.parallax[1] * par * 0.6,
-      base[2] + rz * input.parallax[0] * par,
-    ];
+    const ex = Math.sin(az) * cp * dist + rx * input.parallax[0] * par;
+    const ey = Math.sin(pitch) * dist + input.parallax[1] * par * 0.6;
+    const ez = Math.cos(az) * cp * dist + rz * input.parallax[0] * par;
 
     const s = this.state;
-    const len = Math.hypot(eye[0], eye[1], eye[2]) || 1;
-    s.fwd = [-eye[0] / len, -eye[1] / len, -eye[2] / len];
+    const len = Math.hypot(ex, ey, ez) || 1;
+    const fx = -ex / len;
+    const fy = -ey / len;
+    const fz = -ez / len;
     // right = normalize(fwd x worldUp), up = right x fwd
-    let r: [number, number, number] = [-s.fwd[2], 0, s.fwd[0]];
-    const rl = Math.hypot(r[0], r[2]) || 1;
-    r = [r[0] / rl, 0, r[2] / rl];
-    s.right = r;
-    s.up = [
-      r[1] * s.fwd[2] - r[2] * s.fwd[1],
-      r[2] * s.fwd[0] - r[0] * s.fwd[2],
-      r[0] * s.fwd[1] - r[1] * s.fwd[0],
-    ];
-    s.eye = [eye[0] + look[0], eye[1] + look[1], eye[2] + look[2]];
+    const rl = Math.hypot(fz, fx) || 1;
+    const rgx = -fz / rl;
+    const rgz = fx / rl;
+    set3(s.fwd, fx, fy, fz);
+    set3(s.right, rgx, 0, rgz);
+    set3(s.up, -rgz * fy, rgz * fx - rgx * fz, rgx * fy);
+    set3(s.eye, ex + look[0], ey + look[1], ez + look[2]);
     s.dist = len;
     s.dive = this.dive;
     s.focus = len * (1 - 0.45 * ease);

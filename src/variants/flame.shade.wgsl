@@ -26,7 +26,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   // In volume-filling chaos (D above about 2.4) the cloud is pushed harder toward embers and ash:
   // hotter, sparser threads over darker voids, so it reads as fire rather than fog.
   let vol = smoothstep(2.3, 2.75, axiom_dky());
-  let sv = mix(mix(s, smoothstep(0.10, 0.90, s), 0.65), smoothstep(0.36, 0.80, s), vol);
+  let sv = mix(mix(s, smoothstep(0.10, 0.90, s), 0.65), smoothstep(0.28, 0.58, s), vol);
   let near = clamp(-depth, -1.2, 1.2);
   let glow = clamp(-depth, 0.0, 3.0);     // in front of the focal plane: a bokeh disc
   let far = clamp(depth, 0.0, 2.0);
@@ -39,7 +39,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let spark = select(0.0, 1.0, phase > 0.30 && phase < 0.35);
 
   let jitter = 0.16 * (fract(phase * 7.31) - 0.5);
-  let t = clamp(sv + jitter + 0.16 * near - 0.04 * far + 0.10 * focus + 0.25 * spark + 0.05 * (seed - 0.5), 0.0, 1.0);
+  let t = clamp(sv * (1.0 - 0.25 * vol) + jitter + 0.16 * near - 0.04 * far + 0.10 * focus + 0.25 * spark + 0.05 * (seed - 0.5), 0.0, 1.0);
   var c = flame_heat(t);
   // slow embers stay dim so that a dense red coal is not tinted pink by them
   if (cool) { c = flame_ember(clamp(s + 0.14 * near, 0.0, 1.0), seed) * mix(0.6, 2.3, smoothstep(0.1, 0.6, s)); }

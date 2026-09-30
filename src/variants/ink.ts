@@ -2,7 +2,7 @@ import type { Variant } from './types';
 import gradeWgsl from './ink.grade.wgsl?raw';
 import shadeWgsl from './ink.shade.wgsl?raw';
 
-/** Sumi ink on warm washi: the one light variant. Filaments absorb; the only colour is the seal. */
+/** Sumi ink on warm washi: the one light variant. Filaments absorb; the only colour is the hanko. */
 export const variant: Variant = {
   id: 'ink',
   order: 1,

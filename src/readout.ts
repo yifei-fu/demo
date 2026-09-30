@@ -12,7 +12,7 @@ const num = (v: number): string => Math.abs(v).toFixed(2);
 const term = (v: number): string => (v < 0 ? `+ ${num(v)}` : `${MINUS} ${num(v)}`);
 
 /** One line of the dominant anchor's equations with the live coefficients. */
-export function lawEquation(s: LawSlot): string {
+function lawEquation(s: LawSlot): string {
   const p = s.p;
   switch (s.kind) {
     case 0:
@@ -31,7 +31,7 @@ export function lawEquation(s: LawSlot): string {
 }
 
 /** "0.62 Thomas + 0.38 Aizawa" while blending, the bare anchor name otherwise. */
-export function anchorMix(law: LawView): string {
+function anchorMix(law: LawView): string {
   const [a, b] = law.slots;
   if (b.kind >= 0 && b.weight > 0.01 && a.weight > 0.01)
     return `${num(a.weight)} ${ANCHORS[a.kind]} + ${num(b.weight)} ${ANCHORS[b.kind]}`;

@@ -17,7 +17,8 @@ fn prism_lum(c: vec3f) -> f32 {
 }
 
 fn prism_film(thickness: f32) -> vec3f {
-  let d = thickness + 60.0 * smoothstep(462.0, 492.0, thickness);  // skips the acid greens, as in shade
+  let lime = thickness + 30.0 * smoothstep(283.0, 308.0, thickness);  // skips the acid bands, as in shade
+  let d = lime + 60.0 * smoothstep(462.0, 492.0, lime);
   let x = 2.66 * d * 0.001;
   var xyz = PRISM_AMP * cos(PRISM_PHASE * x) * exp(-PRISM_DECAY * x * x);
   xyz.x += 0.15387 * cos(14.0737 * x) * exp(-0.17877 * x * x);

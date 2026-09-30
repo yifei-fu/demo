@@ -31,50 +31,61 @@ const smoothstep = (a: number, b: number, x: number): number => {
   return t * t * (3 - 2 * t);
 };
 
+/** What the frame's shaders are told about the attractor, all eased. Shared by reference. */
+export interface SceneTone {
+  /** Slowish speed of the settled cloud (world units / s). */
+  refSpeed: number;
+  /** 0 for a point (keep its star), 1 for an extended attractor (equalise dwell). */
+  equalise: number;
+  /** Smoothed extent of the attractor (world units). */
+  radius: number;
+  /** 0..1 depth cue: how volume-filling the attractor is, off while diving. */
+  depthCue: number;
+  /** Kaplan-Yorke dimension and "stable fixed point" flag, for a variant's axiom_dky / axiom_still. */
+  dky: number;
+  still: number;
+}
+
 export class Framing {
   readonly center: [number, number, number] = [0, 0, 0];
+  readonly tone: SceneTone = {
+    refSpeed: 0.3,
+    equalise: 0,
+    radius: 0,
+    depthCue: 0,
+    dky: 0,
+    still: 1,
+  };
   /** multiplier on the default camera distance */
   scale = 1;
-  /** Slowish speed of the settled cloud (world units / s), eased. */
-  refSpeed = 0.3;
-  /** 0 for a point (keep its star), 1 for an extended attractor (equalise dwell). */
-  equalise = 0;
-  /** How volume-filling the attractor is, 0..1 (from its Kaplan-Yorke dimension). */
-  volume = 0;
-  /** Kaplan-Yorke dimension and "stable fixed point" flag, eased for variants to sample. */
-  liveDky = 0;
-  liveStill = 1;
-  private radius = 0;
+  private volume = 0;
   private logScale = 0;
 
-  /** Smoothed extent of the attractor (world units), for depth cueing. */
-  get size(): number {
-    return this.radius;
-  }
-
-  update(measured: Extent | null, dky: number, regime: number, dt: number): void {
+  update(measured: Extent | null, dky: number, regime: number, dive: number, dt: number): void {
+    const tone = this.tone;
     this.volume +=
       (smoothstep(VOLUME_D0, VOLUME_D1, dky) - this.volume) * (1 - Math.exp(-dt / TAU_SIZE));
+    tone.depthCue = this.volume * (1 - dive);
     const kl = 1 - Math.exp(-dt / TAU_LIVE);
-    this.liveDky += (dky - this.liveDky) * kl;
-    this.liveStill += ((regime === 0 ? 1 : 0) - this.liveStill) * kl;
+    tone.dky += (dky - tone.dky) * kl;
+    tone.still += ((regime === 0 ? 1 : 0) - tone.still) * kl;
     if (!measured) return;
     const kc = 1 - Math.exp(-dt / TAU_CENTER);
     for (let i = 0; i < 3; i++)
       this.center[i] += (measured.center[i] * CENTER_FOLLOW - this.center[i]) * kc;
 
-    this.radius += (measured.radius - this.radius) * (1 - Math.exp(-dt / TAU_SIZE));
+    tone.radius += (measured.radius - tone.radius) * (1 - Math.exp(-dt / TAU_SIZE));
     // (floored, so a cloud still parked on the old star cannot make "slow" the norm)
     const ref = Math.max(REF_SPEED_MIN, measured.speed);
-    this.refSpeed += (ref - this.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
+    tone.refSpeed += (ref - tone.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
     // A law that is not a stable fixed point makes slow particles a hotspot straight away, even if
     // most of the cloud has not left the old star yet; only a true fixed point keeps its star.
     // Volume-filling fog has no hotspot, and weighting a periodic speed field only prints it.
     const gate =
-      (regime === 0 ? smoothstep(POINT_RADIUS, POINT_FULL, this.radius) : 1) * (1 - this.volume);
-    this.equalise += (gate - this.equalise) * (1 - Math.exp(-dt / TAU_EQUALISE));
-    const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, this.radius / RADIUS_AT_UNITY));
-    const target = Math.log(fit) * smoothstep(POINT_RADIUS, POINT_FULL, this.radius);
+      (regime === 0 ? smoothstep(POINT_RADIUS, POINT_FULL, tone.radius) : 1) * (1 - this.volume);
+    tone.equalise += (gate - tone.equalise) * (1 - Math.exp(-dt / TAU_EQUALISE));
+    const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, tone.radius / RADIUS_AT_UNITY));
+    const target = Math.log(fit) * smoothstep(POINT_RADIUS, POINT_FULL, tone.radius);
     const step = MAX_LOG_RATE * dt;
     this.logScale += Math.min(step, Math.max(-step, target - this.logScale));
     this.scale = Math.exp(this.logScale);

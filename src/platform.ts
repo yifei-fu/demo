@@ -1,6 +1,6 @@
 /** Small platform helpers used by the Begin tap: wake lock, fullscreen, device class. */
 
-export const isIOS = (): boolean =>
+const isIOS = (): boolean =>
   /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 

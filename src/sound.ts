@@ -45,7 +45,7 @@ export class Sound {
     const audio = this.audio;
     if (!audio) return;
     audio.setLaw(engine.law);
-    this.send(SynthParam.Stir, engine.stirLevel);
+    this.send(SynthParam.Stir, engine.stirring.level);
     this.send(SynthParam.Dive, engine.rig.state.dive);
     this.send(SynthParam.Lambda1, engine.spectrum.l1);
     this.send(SynthParam.Dky, engine.spectrum.dky);

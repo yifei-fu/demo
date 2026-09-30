@@ -1,7 +1,7 @@
 /** `window.__axiom`: the test hooks of DESIGN §5. Always present; live once the engine is bound. */
 import type { Engine } from './engine';
 
-export interface AxiomStats {
+interface AxiomStats {
   fps: number;
   scale: number;
   particles: number;
@@ -11,7 +11,7 @@ export interface AxiomStats {
   variant: string;
 }
 
-export interface AxiomHooks {
+interface AxiomHooks {
   ready: boolean;
   setBead(u: number, v: number): void;
   setCamera(c: { yaw?: number; pitch?: number; dive?: number }): void;
@@ -61,7 +61,7 @@ export function bindHooks(
   hooks.setBead = (u, v) => engine.setBead(u, v);
   hooks.setCamera = (c) => engine.setCamera(c);
   hooks.shake = () => engine.sensors.fireShake();
-  hooks.stir = (x, y, strength) => engine.stir(x, y, strength);
+  hooks.stir = (x, y, strength) => engine.stirring.inject(x, y, strength);
   hooks.step = async (frames = 1, dt = 1 / 60) => {
     const n = Math.max(1, Math.floor(frames));
     for (let i = 0; i < n; i++) {

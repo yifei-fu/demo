@@ -3,7 +3,7 @@
  * then the particle count; creep back up only after a long stretch of headroom.
  */
 
-export interface QualityChange {
+interface QualityChange {
   scale: number;
   particles: number;
 }
@@ -22,8 +22,8 @@ const RETRY_WINDOW_MS = 15000;
 const COOLDOWN_MS = 1800;
 
 export class Quality {
-  scale = 1;
-  particles: number;
+  private scale = 1;
+  private particles: number;
   private ema = 16.7;
   private slowFor = 0;
   private fastFor = 0;

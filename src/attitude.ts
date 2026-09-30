@@ -100,10 +100,11 @@ export function tiltFromPose(pose: Pose, rest: Pose, fullDeg = 25): [number, num
   return [wrapAngle(pose.roll - rest.roll) * k, wrapAngle(rest.pitch - pose.pitch) * k];
 }
 
-/** Dead zone on the vector length, rescaled so the output still reaches 1 at full tilt. */
-export function deadZone(x: number, y: number, zone: number): [number, number] {
+/**
+ * Dead zone on the vector length, as the factor to scale (x, y) by: 0 inside the zone, rescaled so
+ * the output still reaches 1 at full tilt. (A factor, not a tuple: it runs every frame.)
+ */
+export function deadZoneGain(x: number, y: number, zone: number): number {
   const m = Math.hypot(x, y);
-  if (m <= zone) return [0, 0];
-  const k = (m - zone) / (1 - zone) / m;
-  return [x * k, y * k];
+  return m <= zone ? 0 : (m - zone) / (1 - zone) / m;
 }

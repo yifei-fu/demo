@@ -3,15 +3,16 @@ import { backingSize, type Gpu } from './gpu';
 import type { ParamMap } from './map';
 import { Framing } from './framing';
 import { Bead, CameraRig, DIST_FAR } from './navigator';
-import { Particles, type StirParams } from './particles';
+import { Particles, type FrameParams } from './particles';
 import type { PerfProbe } from './perf';
-import { Post, settingsFor, type PostSettings } from './post';
+import { Post } from './post';
+import { settingsFor, type PostSettings } from './post-settings';
 import { Sensors } from './sensors';
+import { Stir } from './stir';
 import type { Variant } from './variants/types';
 import { LAW_LEN } from './law';
 import type { Core, SpectrumReading } from './wasm';
 
-const STIR_STRENGTH = 1;
 /** Extra trail persistence at full dive (the steadier the camera, the more it applies). */
 const DIVE_TRAIL = 0.09;
 const MAX_TRAIL = 0.95;
@@ -46,8 +47,7 @@ export class Engine {
   readonly law = new Float32Array(LAW_LEN);
   readonly settings: PostSettings;
   spectrum: SpectrumReading;
-  /** 0..1 touch-drag energy, for the sound of stirring. */
-  stirLevel = 0;
+  readonly stirring = new Stir();
 
   scale = 1;
   time = 0;
@@ -65,8 +65,7 @@ export class Engine {
   private readonly framing = new Framing();
   private readonly beadPos: [number, number] = [0, 0];
   private readonly frameSettings: PostSettings;
-  private stirGain = 0;
-  private hookStir: { x: number; y: number; strength: number; left: number } | null = null;
+  private readonly frameParams: FrameParams;
   private sinceReset = 0;
 
   constructor(
@@ -77,10 +76,20 @@ export class Engine {
     particleCount: number,
   ) {
     this.sensors = new Sensors(gpu.canvas);
-    this.particles = new Particles(gpu, particleCount, seed, variant);
+    this.particles = new Particles(gpu, particleCount, seed, variant, this.framing.tone);
     this.post = new Post(gpu, variant);
     this.settings = settingsFor(variant);
     this.frameSettings = { ...this.settings };
+    this.frameParams = {
+      cam: this.rig.state,
+      dt: 0,
+      time: 0,
+      frame: 0,
+      width: 0,
+      height: 0,
+      stir: this.stirring.params,
+      splat: true,
+    };
     this.sensors.onShake = () => this.particles.shake();
     this.updateLaw();
     this.spectrum = core.spectrumRead();
@@ -129,11 +138,6 @@ export class Engine {
     this.updateLaw();
   }
 
-  /** Inject a synthetic stir for a short while (test hook). x, y in NDC. */
-  stir(x: number, y: number, strength: number): void {
-    this.hookStir = { x, y, strength, left: 0.6 };
-  }
-
   setCamera(c: { yaw?: number; pitch?: number; dive?: number }): void {
     this.sensors.setOrbit(c.yaw, c.pitch);
     if (c.dive !== undefined) {
@@ -151,13 +155,13 @@ export class Engine {
     this.core.spectrumStep(this.law, SPECTRUM_STEP);
     this.spectrum = this.core.spectrumRead();
     this.particles.setLaw(this.law);
-    this.framing.update(this.particles.extent.value, this.spectrum.dky, this.spectrum.regime, dt);
-    this.particles.refSpeed = this.framing.refSpeed;
-    this.particles.equalise = this.framing.equalise;
-    this.particles.radius = this.framing.size;
-    this.particles.liveDky = this.framing.liveDky;
-    this.particles.liveStill = this.framing.liveStill;
-    this.particles.depthCue = this.framing.volume * (1 - this.rig.state.dive);
+    this.framing.update(
+      this.particles.extent.value,
+      this.spectrum.dky,
+      this.spectrum.regime,
+      this.rig.state.dive,
+      dt,
+    );
     const cam = this.rig.update(
       input,
       dt,
@@ -166,23 +170,21 @@ export class Engine {
       this.framing.scale,
     );
 
-    const stir = this.stirParams(input.stir, dt);
+    this.stirring.update(input.stir, dt);
     this.time += dt;
     this.frame++;
 
     const enc = this.gpu.device.createCommandEncoder({ label: 'frame' });
     if (render) this.post.beginFrame(enc);
     this.particles.extent.clear(enc);
-    this.particles.encode(enc, {
-      cam,
-      dt,
-      time: this.time,
-      frame: this.frame,
-      width: this.width,
-      height: this.height,
-      stir,
-      splat: render,
-    });
+    const fp = this.frameParams;
+    fp.dt = dt;
+    fp.time = this.time;
+    fp.frame = this.frame;
+    fp.width = this.width;
+    fp.height = this.height;
+    fp.splat = render;
+    this.particles.encode(enc, fp);
     if (this.frame % EXTENT_EVERY === 0) this.particles.extent.request(enc);
     if (render) {
       // ramp trail persistence up from zero after any gap so a fresh image is a plain average
@@ -201,8 +203,8 @@ export class Engine {
         n / (n + 1),
       );
       fs.dive = cam.dive;
-      fs.dky = this.framing.liveDky;
-      fs.still = this.framing.liveStill;
+      fs.dky = this.framing.tone.dky;
+      fs.still = this.framing.tone.still;
       fs.zoom = Math.min(MAX_ZOOM_GAIN, (DIST_FAR / cam.dist) ** ZOOM_GAIN_POWER);
       fs.breath = breath * (1 - MAP_DIM * this.mapAmount);
       this.post.encode(
@@ -269,30 +271,5 @@ export class Engine {
 
   private syncMap(): void {
     this.sensors.setMapOpen(this.map?.open ?? false);
-  }
-
-  private stirParams(
-    s: { active: boolean; x: number; y: number; vx: number; vy: number },
-    dt: number,
-  ): StirParams {
-    let active = s.active;
-    let { x, y, vx, vy } = s;
-    let strength = STIR_STRENGTH;
-    const h = this.hookStir;
-    if (h && !active) {
-      h.left -= dt;
-      if (h.left > 0) {
-        active = true;
-        x = h.x;
-        y = h.y;
-        vx = vy = 0;
-        strength = h.strength * Math.min(1, h.left / 0.25);
-      } else this.hookStir = null;
-    }
-    const target = active ? 1 : 0;
-    this.stirGain += (target - this.stirGain) * (1 - Math.exp(-dt / (active ? 0.08 : 0.25)));
-    if (this.stirGain < 0.002) this.stirGain = 0;
-    this.stirLevel = Math.min(1, this.stirGain * strength * (0.45 + 0.35 * Math.hypot(vx, vy)));
-    return { active: this.stirGain > 0, x, y, vx, vy, strength: strength * this.stirGain };
   }
 }

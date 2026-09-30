@@ -43,6 +43,8 @@ export class Pointers {
 
   private readonly touches = new Map<number, Touch>();
   private readonly keys = new Set<string>();
+  /** The only finger down, if exactly one (kept up to date by the events, so frames stay cheap). */
+  private sole: Touch | undefined;
   private orbitYaw = 0;
   private orbitPitch = 0;
   private dive = 0;
@@ -67,7 +69,10 @@ export class Pointers {
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('keydown', this.keyDown);
     window.addEventListener('keyup', this.keyUp);
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.readJoystick();
+    });
     // iOS Safari pinch-zoom gestures would otherwise scale the page
     for (const g of ['gesturestart', 'gesturechange', 'gestureend'])
       document.addEventListener(g, (e) => e.preventDefault());
@@ -75,7 +80,7 @@ export class Pointers {
 
   /** Fold accumulated pointer state into `input`; marks `input.active` on any human input. */
   apply(input: Input, now: number): void {
-    const only = this.touches.size === 1 ? this.touches.values().next().value : undefined;
+    const only = this.sole;
     const single = only && !only.passive ? only : undefined;
     input.hold = !!single && !single.moved && now - single.t0 > HOLD_MS;
     const dragging = !!single?.moved;
@@ -94,17 +99,8 @@ export class Pointers {
     input.pinch = this.pinch;
     this.pinch = 0;
 
-    let jx = 0;
-    let jy = 0;
-    for (const k of this.keys) {
-      const v = KEY_TILT[k];
-      if (v) {
-        jx += v[0];
-        jy += v[1];
-      }
-    }
-    this.joystick[0] = jx;
-    this.joystick[1] = jy;
+    const jx = this.joystick[0];
+    const jy = this.joystick[1];
     if (this.pulse || input.hold || dragging || this.touches.size > 1 || jx !== 0 || jy !== 0)
       input.active = true;
     input.map = this.mapKey;
@@ -146,6 +142,7 @@ export class Pointers {
       moved: false,
       passive,
     });
+    this.refreshSole();
     this.stirPos = this.ndc(e);
     this.stirV = [0, 0];
     this.stirLast = performance.now();
@@ -187,6 +184,7 @@ export class Pointers {
 
   private up = (e: PointerEvent): void => {
     this.touches.delete(e.pointerId);
+    this.refreshSole();
     this.mouseDrag = false;
     this.pinchDist = this.touches.size === 2 ? this.touchDistance() : 0;
   };
@@ -205,6 +203,7 @@ export class Pointers {
     if (!this.enabled || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.code in KEY_TILT) {
       this.keys.add(e.code);
+      this.readJoystick();
       e.preventDefault();
     } else if (e.code === 'KeyM') {
       if (!e.repeat) this.mapKey = true;
@@ -219,7 +218,23 @@ export class Pointers {
 
   private keyUp = (e: KeyboardEvent): void => {
     this.keys.delete(e.code);
+    this.readJoystick();
   };
+
+  private readJoystick(): void {
+    let jx = 0;
+    let jy = 0;
+    for (const k of this.keys) {
+      jx += KEY_TILT[k][0];
+      jy += KEY_TILT[k][1];
+    }
+    this.joystick[0] = jx;
+    this.joystick[1] = jy;
+  }
+
+  private refreshSole(): void {
+    this.sole = this.touches.size === 1 ? this.touches.values().next().value : undefined;
+  }
 
   private touchDistance(): number {
     const [a, b] = [...this.touches.values()];

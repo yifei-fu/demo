@@ -1,5 +1,5 @@
 /** All senses in one place: device attitude, motion, pointers and keys feed one smoothed Input. */
-import { deadZone, poseFromEuler, tiltFromPose, wrapAngle, type Pose } from './attitude';
+import { deadZoneGain, poseFromEuler, tiltFromPose, wrapAngle, type Pose } from './attitude';
 import { createInput, type Input } from './input';
 import { Pointers } from './pointers';
 
@@ -103,7 +103,9 @@ export class Sensors {
     const jy = this.pointers.joystick[1];
     this.joy[0] += (jx - this.joy[0]) * smoothing(dt, 0.12);
     this.joy[1] += (jy - this.joy[1]) * smoothing(dt, 0.12);
-    const [dx, dy] = deadZone(this.rawTilt[0], this.rawTilt[1], TILT_DEAD_ZONE);
+    const gain = deadZoneGain(this.rawTilt[0], this.rawTilt[1], TILT_DEAD_ZONE);
+    const dx = this.rawTilt[0] * gain;
+    const dy = this.rawTilt[1] * gain;
     this.tilt[0] += (dx - this.tilt[0]) * kt;
     this.tilt[1] += (dy - this.tilt[1]) * kt;
     inp.tilt[0] = this.tilt[0] + this.joy[0];

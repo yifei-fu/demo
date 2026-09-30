@@ -27,9 +27,11 @@ fn prism_fringe(x: f32) -> vec3f {
 
 // Linear colour of a film `d` nanometres thick, seen face-on. Mean 1 per channel over a period.
 fn prism_film(thickness: f32) -> vec3f {
-  // Skip the acid greens: past 460 nm the lookup jumps 60 nm ahead, so green is a quick transition
-  // between aqua and rose instead of a broad field.
-  let d = thickness + 60.0 * smoothstep(462.0, 492.0, thickness);
+  // Skip the acid bands: the lookup jumps 30 nm ahead across the lime near 300 nm and 60 nm across
+  // the green near 470 nm, so both are quick transitions (cream to gold, aqua to rose) instead of
+  // broad fields of khaki or green.
+  let lime = thickness + 30.0 * smoothstep(283.0, 308.0, thickness);
+  let d = lime + 60.0 * smoothstep(462.0, 492.0, lime);
   let r = vec3f(1.0) - prism_fringe(2.0 * PRISM_IOR * d * 0.001) / PRISM_WHITE;
   return max(r, vec3f(0.0));
 }
@@ -51,15 +53,20 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   // resting point). Near light is thin, far light thick and pale, which is atmospheric perspective
   // for free; the attractor spans about one cycle in depth, so every line of sight through a dense
   // volume adds up to pearl, and turning the phone slides hue along the depth.
-  let focused_d = 250.0 + 260.0 * s + 105.0 * z + 30.0 * min(z, 0.0);
+  // In volume-filling chaos every hue along a line of sight would add up to dim grey, so there the
+  // depth term relaxes, the palette slides warm (fast light would otherwise sit in blue and teal) and
+  // the light brightens a little: a rose-cream pearl, not a grey or teal fog.
+  let volume = smoothstep(2.3, 2.7, axiom_dky());
+  let focused_d = 250.0 - 85.0 * volume + 260.0 * s + (105.0 - 50.0 * volume) * z + 30.0 * min(z, 0.0) + 36.0 * (seed - 0.5);
   // Far from the focal plane (the dive) light drifts to a warm pearl, cream to rose, and stops
   // changing hue with speed, so bokeh discs are soft and pearly rather than striped or violet.
-  let defocus = smoothstep(0.9, 2.2, abs(depth));
+  let defocus = smoothstep(0.7, 1.8, abs(depth));
   let pearl_d = 308.0 + 50.0 * s;
-  let settled_d = mix(focused_d, pearl_d, 0.7 * defocus) + 12.0 * (phase - 0.5) + 60.0 * (seed - 0.5);
+  let settled_d = mix(focused_d, pearl_d, 0.7 * defocus) + 12.0 * (phase - 0.5);
   // Falling light is split as by a prism: each newcomer keeps one hue of its own across a full cycle,
-  // so the streams fan out as a spectrum and the faint haze between them averages to pearl.
-  let falling_d = 250.0 + 360.0 * phase + 60.0 * (seed - 0.5);
+  // so the streams fan out as a spectrum and the faint haze between them averages to pearl. Out of
+  // focus, where hairlines are only soft bokeh, they settle to the same pearl instead of confetti.
+  let falling_d = mix(250.0 + 360.0 * phase + 36.0 * (seed - 0.5), pearl_d + 40.0 * (phase - 0.5), 0.8 * defocus);
   let fresh = 1.0 - smoothstep(0.0, 0.02, abs(speed - PRISM_FALLING));
   var c = prism_film(clamp(mix(settled_d, falling_d, fresh), 190.0, 900.0));
   // Pastel: a veil of white, more of it the further out of focus, then equalise the luminance so no
@@ -82,5 +89,5 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   // defocused near light spreads thin, so it is lifted to keep its bokeh disc visible
   let lift = 1.0 + 0.7 * clamp(-depth, 0.0, 1.0);
   let haze = 1.0 - 0.25 * clamp(depth, 0.0, 1.2);
-  return c * lift * haze * glint;
+  return c * lift * haze * glint * (1.0 + 0.3 * volume);
 }

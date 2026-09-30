@@ -5,14 +5,14 @@
 struct Frame {
   right: vec4f,   // xyz, focal_x     (ndc.x = cam.x / cam.z * focal_x)
   up: vec4f,      // xyz, focal_y
-  fwd: vec4f,     // xyz, unused
-  eye: vec4f,     // xyz, unused
+  fwd: vec4f,     // xyz (w unused)
+  eye: vec4f,     // xyz (w unused)
   ray: vec4f,     // xyz stir ray direction, w = stir radius in tan units
   screen: vec4f,  // width, height, dt, time
   lens: vec4f,    // focus distance, aperture (px), near plane, max CoC (px)
   stir: vec4f,    // touch ndc x, y, strength, dive amount
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
-  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
+  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride (w unused)
   probe: vec4f,   // xyz: centre the extent histogram is measured from, w: the attractor's radius
   tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor, depth cue strength
   live: vec4f,    // eased Kaplan-Yorke dimension, still-point flag (see axiom_dky / axiom_still)
@@ -42,9 +42,12 @@ const SETTLED_START: f32 = 1.5;      // age (s) at which a newcomer starts to be
 const SETTLED_END: f32 = 6.0;
 const REFERENCE_SPEED: f32 = 0.45;   // the hue newcomers wear, whatever their speed
 const TRACER_FRACTION: f32 = 0.002;
-const TRACER_WEIGHT: f32 = 7.0;
-const TAIL_STEPS: i32 = 14;
-const TAIL_DT: f32 = 0.04;           // world time between tail samples (a 0.55 s tail)
+const TRACER_WEIGHT: f32 = 4.0;
+// A tail is walked back along the flow in many small steps so a still frame shows a continuous
+// hair-line, not a string of dots; the per-sample weight keeps its total light unchanged.
+const TAIL_STEPS: i32 = 48;
+const TAIL_DT: f32 = 0.0115;         // world time between tail samples (a 0.55 s tail)
+const TAIL_ENERGY: f32 = 14.0 / 48.0;
 // The attractor's extent is measured on a sparse sample of settled particles: the sum of their
 // positions (fixed point) and a histogram of their distance from the last known centre.
 const POS_FIXED: f32 = 16384.0;
@@ -239,10 +242,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   // fixed point is one cloud of equally slow particles, so it is left alone (tone.y = 0).
   let slow = clamp(speed / max(F.tone.x, 1e-3), 0.0, 1.0);
   let dwell = mix(1.0, max(pow(slow, DWELL_POWER), F.tone.z), F.tone.y);
-  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), dwell, settled);
+  // (in volume-filling fog the inward streams are invisible anyway, and a lone bright tracer only
+  // reads as a stray white curl, so tracers fade out there)
+  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT * (1.0 - F.tone.w), tracer), dwell, settled);
   splat(q_draw, col, wgt, hj);
 
-  if (tracer) {
+  if (tracer && wgt > 0.05) {
     // a comet tail: the recent path, walked backward along the flow, fading with age
     // (each sample lands at a random spot on its segment, so successive frames fill the line in)
     var pb = q_draw;
@@ -250,7 +255,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
       let next = pb - f_world_of(law, pb) * TAIL_DT;
       let hk = pcg(hj + u32(k) * 0x9e3779b9u);
       let fade = 1.0 - (f32(k) - u01(hk)) / f32(TAIL_STEPS + 1);
-      splat(mix(pb, next, u01(pcg(hk))), col, wgt * fade * fade, hk);
+      splat(mix(pb, next, u01(pcg(hk))), col, wgt * fade * fade * TAIL_ENERGY, hk);
       pb = next;
     }
   }

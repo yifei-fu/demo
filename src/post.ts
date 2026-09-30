@@ -1,5 +1,6 @@
 /** Resolve, trails, dual-Kawase bloom and the final composite. */
 import { createShader, createUniform, type Gpu } from './gpu';
+import { srgbToLinear, type PostSettings } from './post-settings';
 import postWgsl from './shaders/post.wgsl?raw';
 import type { Variant } from './variants/types';
 
@@ -8,59 +9,28 @@ const BLOOM_LEVELS = 5;
 const UNIFORM_FLOATS = 28;
 /** The unsharp mask's blur: three halvings, about a sixteenth of the screen wide in radius. */
 const CLARITY_LEVELS = 3;
-const VIGNETTE = 0.42;
 const ACCUM_BYTES_PER_PIXEL = 16;
-export interface PostSettings {
-  /** Scene-referred gain ahead of the tonemap. */
-  exposure: number;
-  /** Trail persistence: weight of the previous frame in the running average. */
-  trail: number;
-  bloom: number;
-  grain: number;
-  vignette: number;
-  /** Chromatic aberration at the frame corners, as a fraction of the frame. */
-  ca: number;
-  /** Slow multiplicative pulse on the exposure. */
-  breath: number;
-  /** Local contrast: 0 off, ~1 a strong unsharp mask of the light. */
-  clarity: number;
-  /** Linear multiplier on the bloom term only. */
-  bloomTint: readonly [number, number, number];
-  /** 0..1 how far the camera has dived; widens the denoise. */
-  dive: number;
-  /** Density lift for a magnified view (diving, or a camera pulled back). */
-  zoom: number;
-  /** Eased Kaplan-Yorke dimension and still-point flag (axiom_dky / axiom_still). */
-  dky: number;
-  still: number;
-}
-
-/** Per-frame finish settings for a variant. The engine adds breath and dimming on top. */
-export function settingsFor(v: Variant): PostSettings {
-  const r = v.render;
-  return {
-    exposure: r.exposure,
-    trail: r.trail,
-    bloom: r.bloom,
-    grain: r.grain,
-    vignette: VIGNETTE,
-    ca: r.aberration,
-    breath: 1,
-    clarity: r.clarity ?? 0,
-    bloomTint: r.bloomTint ?? [1, 1, 1],
-    dive: 0,
-    zoom: 1,
-    dky: 0,
-    still: 1,
-  };
-}
-
-const srgbToLinear = (c: number): number =>
-  c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+const ADD: GPUBlendComponent = { srcFactor: 'one', dstFactor: 'one', operation: 'add' };
 
 interface Level {
   tex: GPUTexture;
   view: GPUTextureView;
+}
+
+/** One full-screen pass with its descriptor built once (the frame loop must not allocate). */
+interface FullPass {
+  pipe: GPURenderPipeline;
+  bind: GPUBindGroup;
+  desc: GPURenderPassDescriptor;
+  color: GPURenderPassColorAttachment;
+}
+
+/** Everything one frame runs, for one of the two ping-pong history textures. */
+interface Chain {
+  resolve: FullPass;
+  clarity: FullPass[];
+  bloom: FullPass[];
+  composite: FullPass;
 }
 
 export class Post {
@@ -80,12 +50,7 @@ export class Post {
   private hdr: Level[] = [];
   private bloom: Level[] = [];
   private clarity: Level[] = [];
-  private clarBG: GPUBindGroup[] = [];
-  private resolveBG: GPUBindGroup[] = [];
-  private downFirstBG: GPUBindGroup[] = [];
-  private downBG: GPUBindGroup[] = [];
-  private upBG: GPUBindGroup[] = [];
-  private compositeBG: GPUBindGroup[] = [];
+  private chains: Chain[] = [];
   /** Set once by the engine when GPU timing is on (?perf). */
   timestamps: GPURenderPassTimestampWrites | undefined;
   private flip = 0;
@@ -119,17 +84,7 @@ export class Post {
           module,
           entryPoint: fragment,
           constants,
-          targets: [
-            {
-              format,
-              blend: additive
-                ? {
-                    color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-                    alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-                  }
-                : undefined,
-            },
-          ],
+          targets: [{ format, blend: additive ? { color: ADD, alpha: ADD } : undefined }],
         },
         primitive: { topology: 'triangle-list' },
       });
@@ -153,8 +108,7 @@ export class Post {
     this.width = width;
     this.height = height;
     this.destroy();
-    const device = this.device;
-    this.accumBuf = device.createBuffer({
+    this.accumBuf = this.device.createBuffer({
       label: 'accum',
       size: width * height * ACCUM_BYTES_PER_PIXEL,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -170,80 +124,7 @@ export class Post {
       this.bloom.push(this.level(w, h, `bloom ${i}`));
       if (i < CLARITY_LEVELS) this.clarity.push(this.level(w, h, `clarity ${i}`));
     }
-
-    const pb = { binding: 0, resource: { buffer: this.params } };
-    const view = (l: Level): GPUBindingResource => l.view;
-    const smp = this.sampler;
-    this.resolveBG = [0, 1].map((i) =>
-      device.createBindGroup({
-        layout: this.resolvePipe.getBindGroupLayout(0),
-        entries: [
-          pb,
-          { binding: 1, resource: { buffer: this.accum } },
-          { binding: 2, resource: view(this.hdr[i ^ 1]) },
-        ],
-      }),
-    );
-    this.downFirstBG = [0, 1].map((i) =>
-      device.createBindGroup({
-        layout: this.downFirstPipe.getBindGroupLayout(0),
-        entries: [pb, { binding: 1, resource: view(this.hdr[i]) }, { binding: 2, resource: smp }],
-      }),
-    );
-    this.downBG = [];
-    this.upBG = [];
-    for (let i = 1; i < BLOOM_LEVELS; i++) {
-      this.downBG.push(
-        device.createBindGroup({
-          layout: this.downPipe.getBindGroupLayout(0),
-          entries: [
-            { binding: 1, resource: view(this.bloom[i - 1]) },
-            { binding: 2, resource: smp },
-          ],
-        }),
-      );
-      this.upBG.push(
-        device.createBindGroup({
-          layout: this.upPipe.getBindGroupLayout(0),
-          entries: [
-            { binding: 1, resource: view(this.bloom[i]) },
-            { binding: 2, resource: smp },
-          ],
-        }),
-      );
-    }
-    // clarity chain: hdr -> 1/2 -> 1/4 -> 1/8 with the plain 4-tap downsample (no threshold)
-    this.clarBG = [0, 1].map((i) =>
-      device.createBindGroup({
-        layout: this.downPipe.getBindGroupLayout(0),
-        entries: [
-          { binding: 1, resource: view(this.hdr[i]) },
-          { binding: 2, resource: smp },
-        ],
-      }),
-    );
-    for (let i = 1; i < CLARITY_LEVELS; i++)
-      this.clarBG.push(
-        device.createBindGroup({
-          layout: this.downPipe.getBindGroupLayout(0),
-          entries: [
-            { binding: 1, resource: view(this.clarity[i - 1]) },
-            { binding: 2, resource: smp },
-          ],
-        }),
-      );
-    this.compositeBG = [0, 1].map((i) =>
-      device.createBindGroup({
-        layout: this.compositePipe.getBindGroupLayout(0),
-        entries: [
-          pb,
-          { binding: 1, resource: view(this.hdr[i]) },
-          { binding: 2, resource: view(this.bloom[0]) },
-          { binding: 3, resource: smp },
-          { binding: 4, resource: view(this.clarity[CLARITY_LEVELS - 1]) },
-        ],
-      }),
-    );
+    this.chains = [this.chain(0), this.chain(1)];
   }
 
   /** Clear the splat target; call before the particle pass of a rendered frame. */
@@ -269,39 +150,89 @@ export class Post {
     d.set(s.bloomTint, 24);
     this.device.queue.writeBuffer(this.params, 0, d);
 
-    const cur = this.flip;
+    const chain = this.chains[this.flip];
+    run(encoder, chain.resolve);
+    if (s.clarity !== 0)
+      for (let i = 0; i < chain.clarity.length; i++) run(encoder, chain.clarity[i]);
+    for (let i = 0; i < chain.bloom.length; i++) run(encoder, chain.bloom[i]);
+    // the swapchain view is new every frame; the timing query rides on the last pass
+    chain.composite.color.view = target;
+    chain.composite.desc.timestampWrites = this.timestamps;
+    run(encoder, chain.composite);
+    this.flip ^= 1;
+  }
+
+  /** The passes for one frame, given which of the two history textures this frame writes. */
+  private chain(cur: number): Chain {
+    const { hdr, bloom, clarity, sampler } = this;
+    const params = { binding: 0, resource: { buffer: this.params } };
+    const bindings = (pipe: GPURenderPipeline, ...entries: GPUBindGroupEntry[]): GPUBindGroup =>
+      this.device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
+    const src = (view: GPUTextureView): GPUBindGroupEntry[] => [
+      { binding: 1, resource: view },
+      { binding: 2, resource: sampler },
+    ];
     const full = (
-      view: GPUTextureView,
       pipe: GPURenderPipeline,
-      bg: GPUBindGroup,
-      load: GPULoadOp = 'clear',
-      timestampWrites?: GPURenderPassTimestampWrites,
-    ): void => {
-      const pass = encoder.beginRenderPass({
-        timestampWrites,
-        colorAttachments: [
-          { view, loadOp: load, storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
-        ],
-      });
-      pass.setPipeline(pipe);
-      pass.setBindGroup(0, bg);
-      pass.draw(3);
-      pass.end();
+      bind: GPUBindGroup,
+      view: GPUTextureView,
+      loadOp: GPULoadOp = 'clear',
+    ): FullPass => {
+      const color: GPURenderPassColorAttachment = {
+        view,
+        loadOp,
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      };
+      return { pipe, bind, color, desc: { colorAttachments: [color] } };
     };
 
-    full(this.hdr[cur].view, this.resolvePipe, this.resolveBG[cur]);
-    if (s.clarity !== 0) {
-      full(this.clarity[0].view, this.downPipe, this.clarBG[cur]);
-      for (let i = 1; i < CLARITY_LEVELS; i++)
-        full(this.clarity[i].view, this.downPipe, this.clarBG[2 + i - 1]);
-    }
-    full(this.bloom[0].view, this.downFirstPipe, this.downFirstBG[cur]);
+    const resolve = full(
+      this.resolvePipe,
+      bindings(
+        this.resolvePipe,
+        params,
+        { binding: 1, resource: { buffer: this.accum } },
+        { binding: 2, resource: hdr[cur ^ 1].view },
+      ),
+      hdr[cur].view,
+    );
+    // hdr -> 1/2 -> 1/4 -> 1/8 with the plain 4-tap downsample (no threshold)
+    const blur: FullPass[] = clarity.map((level, i) =>
+      full(
+        this.downPipe,
+        bindings(this.downPipe, ...src(i === 0 ? hdr[cur].view : clarity[i - 1].view)),
+        level.view,
+      ),
+    );
+    const bloomPasses: FullPass[] = [
+      full(
+        this.downFirstPipe,
+        bindings(this.downFirstPipe, params, ...src(hdr[cur].view)),
+        bloom[0].view,
+      ),
+    ];
     for (let i = 1; i < BLOOM_LEVELS; i++)
-      full(this.bloom[i].view, this.downPipe, this.downBG[i - 1]);
+      bloomPasses.push(
+        full(this.downPipe, bindings(this.downPipe, ...src(bloom[i - 1].view)), bloom[i].view),
+      );
     for (let i = BLOOM_LEVELS - 2; i >= 0; i--)
-      full(this.bloom[i].view, this.upPipe, this.upBG[i], 'load');
-    full(target, this.compositePipe, this.compositeBG[cur], 'clear', this.timestamps);
-    this.flip ^= 1;
+      bloomPasses.push(
+        full(this.upPipe, bindings(this.upPipe, ...src(bloom[i + 1].view)), bloom[i].view, 'load'),
+      );
+    const composite = full(
+      this.compositePipe,
+      bindings(
+        this.compositePipe,
+        params,
+        { binding: 1, resource: hdr[cur].view },
+        { binding: 2, resource: bloom[0].view },
+        { binding: 3, resource: sampler },
+        { binding: 4, resource: clarity[CLARITY_LEVELS - 1].view },
+      ),
+      hdr[cur].view,
+    );
+    return { resolve, clarity: blur, bloom: bloomPasses, composite };
   }
 
   private level(w: number, h: number, label: string): Level {
@@ -318,4 +249,12 @@ export class Post {
     this.accumBuf?.destroy();
     for (const l of [...this.hdr, ...this.bloom, ...this.clarity]) l.tex.destroy();
   }
+}
+
+function run(encoder: GPUCommandEncoder, p: FullPass): void {
+  const pass = encoder.beginRenderPass(p.desc);
+  pass.setPipeline(p.pipe);
+  pass.setBindGroup(0, p.bind);
+  pass.draw(3);
+  pass.end();
 }

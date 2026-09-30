@@ -1,6 +1,7 @@
 /** The particle cloud: one fused compute pass integrates, respawns and splats every frame. */
 import { createShader, createUniform, type Gpu } from './gpu';
 import { ExtentProbe } from './extent';
+import type { SceneTone } from './framing';
 import { LAW_LEN } from './law';
 import type { CameraState } from './navigator';
 import lawWgsl from './shaders/law.wgsl?raw';
@@ -66,23 +67,22 @@ export class Particles {
   private readonly f32 = new Float32Array(this.frameData);
   private readonly u32 = new Uint32Array(this.frameData);
   private bindGroup: GPUBindGroup | null = null;
+  private readonly passDesc: GPUComputePassDescriptor = { label: 'particles' };
   /** Set once by the engine when GPU timing is on (?perf). */
   timestamps: GPUComputePassTimestampWrites | undefined;
-  /** Set each frame by the engine from the framing measurement. */
-  refSpeed = 0.3;
-  equalise = 0;
-  radius = 0.8;
-  depthCue = 0;
-  /** Eased Kaplan-Yorke dimension and still-point flag, for the variant's axiom_dky / axiom_still. */
-  liveDky = 0;
-  liveStill = 1;
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;
   private readonly seedFraction: number;
   private readonly aperture: number;
 
-  constructor(gpu: Gpu, count: number, seed: number, variant: Variant) {
+  constructor(
+    gpu: Gpu,
+    count: number,
+    seed: number,
+    variant: Variant,
+    private readonly tone: SceneTone,
+  ) {
     this.device = gpu.device;
     this.seed = seed >>> 0;
     this.seedFraction = (Math.imul(seed >>> 0, 2654435761) >>> 0) / 2 ** 32;
@@ -191,10 +191,11 @@ export class Particles {
       Math.max(1, Math.floor(this.count / EXTENT_SAMPLES)),
       0,
     );
+    const tone = this.tone;
     const probe = this.extent.probe;
-    vec4(f, 40, probe[0], probe[1], probe[2], this.radius);
-    vec4(f, 44, this.refSpeed, this.equalise, DWELL_FLOOR, this.depthCue);
-    vec4(f, 48, this.liveDky, this.liveStill, 0, 0);
+    vec4(f, 40, probe[0], probe[1], probe[2], tone.radius);
+    vec4(f, 44, tone.refSpeed, tone.equalise, DWELL_FLOOR, tone.depthCue);
+    vec4(f, 48, tone.dky, tone.still, 0, 0);
     const u = this.u32;
     u[52] = p.frame >>> 0;
     u[53] = this.count;
@@ -203,10 +204,8 @@ export class Particles {
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);
-    const pass = encoder.beginComputePass({
-      label: 'particles',
-      timestampWrites: this.timestamps,
-    });
+    this.passDesc.timestampWrites = this.timestamps;
+    const pass = encoder.beginComputePass(this.passDesc);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
     pass.dispatchWorkgroups(Math.min(groups, MAX_GROUPS_X), Math.ceil(groups / MAX_GROUPS_X));
