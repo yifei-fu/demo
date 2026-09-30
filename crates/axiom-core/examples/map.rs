@@ -6,9 +6,9 @@
 //! lines at integer D. Ticks outside the rim mark where each anchor sits.
 //! The PNG is written by hand (stored deflate blocks), no dependencies.
 
-use axiom_core::anchors::{norm, System, NAMES};
+use axiom_core::anchors::NAMES;
 use axiom_core::law::{write_params, Law, Placement, PARAMS_LEN};
-use axiom_core::spectrum::{classify, Benettin, FIXED, REST_SPEED};
+use axiom_core::spectrum::classify_law;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const BG: [u8; 3] = [5, 6, 10];
@@ -41,33 +41,12 @@ fn palette(d: f64) -> [u8; 3] {
     std::array::from_fn(|k| (c0[k] + (c1[k] - c0[k]) * t).round() as u8)
 }
 
-/// D_KY and regime of the world field at one disk point.
+/// D_KY and regime of the world field at one disk point: 25 world units of
+/// transient, then 100 of averaging.
 fn probe(u: f64, v: f64, seed: u32) -> (f64, u8) {
     let mut block = [0.0f32; PARAMS_LEN];
     write_params(u as f32, v as f32, seed, &mut block);
-    let law = Law::from_block(&block);
-    let mut b = Benettin::new([0.31, -0.22, 0.27], 0.0);
-    // 25 world units of transient, then 100 of averaging, in steps of 0.5.
-    let mut rest = 0;
-    for k in 0..250 {
-        b.advance(&law, 0.025, 20);
-        if !b.healthy() {
-            break;
-        }
-        // A tracer that stays put is on a fixed point; stop early.
-        rest = if norm(law.field(b.x)) < REST_SPEED {
-            rest + 1
-        } else {
-            0
-        };
-        if rest >= 12 {
-            return (0.0, FIXED);
-        }
-        if k == 49 {
-            b.restart_average();
-        }
-    }
-    classify(b.exponents(), rest >= 4)
+    classify_law(&Law::from_block(&block), 25.0, 100.0, 0.025)
 }
 
 // ------------------------------------------------------------------ PNG ---

@@ -14,8 +14,11 @@ crate-type = ["cdylib", "rlib"]
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
+# No `panic = "abort"` here on purpose: with it, `cargo build --release
+# --all-targets` compiles the lib twice (abort for examples, unwind for tests)
+# and the two cdylib/rlib outputs collide. wasm32-unknown-unknown aborts on
+# panic by itself, and scripts/build-wasm.sh also passes -C panic=abort.
 
 # The invariant tests integrate thousands of trajectories; keep them quick.
 [profile.test]

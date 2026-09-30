@@ -7,7 +7,7 @@ crate="$root/crates/axiom-core"
 out_dir="$root/src/assets"
 out="$out_dir/axiom.wasm"
 
-RUSTFLAGS="-C target-feature=+simd128" \
+RUSTFLAGS="-C target-feature=+simd128 -C panic=abort" \
   cargo build --release --target wasm32-unknown-unknown --manifest-path "$crate/Cargo.toml"
 
 mkdir -p "$out_dir"

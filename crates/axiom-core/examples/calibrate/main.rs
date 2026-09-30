@@ -16,7 +16,7 @@ mod tools;
 
 use axiom_core::anchors::{eigenvalues, norm, Anchor, System, NAMES, V3};
 use axiom_core::law::pure_law_with;
-use axiom_core::spectrum::{kaplan_yorke, regime, Benettin};
+use axiom_core::spectrum::{classify, kaplan_yorke, regime, Benettin, REST_SPEED};
 use axiom_core::tables::{sample_rows, COLS};
 use routes::{Centre, Spec};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -348,7 +348,7 @@ fn solve_route(spec: &Spec) -> Vec<Row> {
                 spec.tau_cap
             };
             let speed = tau * row.speed_sys / row.l;
-            row.tau = if row.speed_sys > 0.0 && speed < spec.min_speed {
+            row.tau = if row.regime >= 3 && speed < spec.min_speed {
                 (tau * spec.min_speed / speed).min(spec.tau_cap)
             } else {
                 tau
@@ -451,7 +451,7 @@ fn check(kind: usize, rows: &[[f32; COLS]]) {
         NAMES[kind]
     );
     println!(
-        "  r     reg   D    lambda(world)                 r99   max   |mean|  L      tau   omega"
+        "  r     reg   D    lambda(world)                 r99   max   |mean|  speed  L      tau   omega"
     );
     let rs: Vec<f64> = (0..=40).map(|i| i as f64 / 40.0).collect();
     let out = par_map(&rs, |_, &r| {
@@ -465,7 +465,10 @@ fn check(kind: usize, rows: &[[f32; COLS]]) {
             pts.push(b.x);
         }
         let l = b.exponents();
-        let d = kaplan_yorke(l);
+        let speeds: Vec<f64> = pts.iter().map(|p| norm(law.field(*p))).collect();
+        let speed = speeds.iter().sum::<f64>() / speeds.len() as f64;
+        let resting = speeds.iter().all(|v| *v < REST_SPEED);
+        let (d, code) = classify(l, resting);
         let mean = pts
             .iter()
             .fold([0.0; 3], |m, p| [m[0] + p[0], m[1] + p[1], m[2] + p[2]]);
@@ -478,17 +481,18 @@ fn check(kind: usize, rows: &[[f32; COLS]]) {
         (
             l,
             d,
-            regime(l, d),
+            code,
             radius_q(&pts, [0.0; 3], 0.99),
             rmax,
             mean,
+            speed,
             b.healthy(),
         )
     });
-    for (r, (l, d, reg, r99, rmax, mean, ok)) in rs.iter().zip(out) {
+    for (r, (l, d, reg, r99, rmax, mean, speed, ok)) in rs.iter().zip(out) {
         let s = sample_rows(rows, *r);
         println!(
-            " {r:.3}   {reg}   {d:.2}  ({:+.3},{:+.3},{:+.3})  {r99:.2}  {rmax:.2}  {mean:.2}   {:6.2} {:.2}  {:.2}{}",
+            " {r:.3}   {reg}   {d:.2}  ({:+.3},{:+.3},{:+.3})  {r99:.2}  {rmax:.2}  {mean:.2}   {speed:.2}  {:6.2} {:.2}  {:.2}{}",
             l[0], l[1], l[2], s.l, s.tau, s.omega, if ok { "" } else { "  ESCAPED" }
         );
     }

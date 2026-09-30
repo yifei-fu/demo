@@ -250,6 +250,37 @@ pub fn classify(l: [f64; 3], at_rest: bool) -> (f64, u8) {
     (d, regime(l, d))
 }
 
+/// Offline classification of a law: a tracer runs `transient` world units,
+/// then `average` more with infinite-memory exponents. Returns
+/// `(D_KY, regime)`; a tracer that stops is reported as a fixed point at once.
+/// This is what the map preview and the share tests use.
+pub fn classify_law(law: &Law, transient: f64, average: f64, dt: f64) -> (f64, u8) {
+    const CHUNK: f64 = 0.5;
+    let per_chunk = (CHUNK / dt).round().max(1.0) as usize;
+    let chunks = ((transient + average) / CHUNK).ceil() as usize;
+    let restart = (transient / CHUNK).round() as usize;
+    let mut b = Benettin::new([0.31, -0.22, 0.27], 0.0);
+    let mut rest = 0;
+    for k in 0..chunks {
+        b.advance(law, dt, per_chunk);
+        if !b.healthy() {
+            break;
+        }
+        rest = if norm(law.field(b.x)) < REST_SPEED {
+            rest + 1
+        } else {
+            0
+        };
+        if rest >= 12 {
+            return (0.0, FIXED);
+        }
+        if k + 1 == restart {
+            b.restart_average();
+        }
+    }
+    classify(b.exponents(), rest >= 4)
+}
+
 /// A tracer that has been this slow (world units per unit time) for a while is
 /// sitting on a fixed point, whatever the averaged exponents still remember.
 pub const REST_SPEED: f64 = 0.01;

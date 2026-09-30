@@ -1,0 +1,49 @@
+//! Wind (stir, dive) and whoosh (shake): band-passed noise, shared by all presets.
+
+use super::dsp::{smoothing, white, Svf};
+use crate::rng::Rng;
+use std::f64::consts::TAU;
+
+#[derive(Default)]
+pub struct Wind {
+    lfo_phase: f64,
+    lp: [f32; 2],
+    band: [Svf; 2],
+    whoosh_band: [Svf; 2],
+    centre: f32,
+    whoosh: f32,
+}
+
+impl Wind {
+    /// A shake: the whoosh starts at full level and dies away.
+    pub fn whoosh(&mut self) {
+        self.whoosh = 1.0;
+    }
+
+    /// Slow updates: the band's centre drifts on a slow LFO, opens with dive.
+    pub fn control(&mut self, dt: f32, sample_rate: f32, dive: f32) {
+        self.lfo_phase = (self.lfo_phase + TAU * dt as f64 * 0.11) % TAU;
+        let sweep = 0.5 + 0.5 * self.lfo_phase.sin() as f32;
+        let target_hz = 380.0 + 900.0 * sweep + 500.0 * dive;
+        let f = (std::f32::consts::TAU * target_hz / sample_rate).min(1.0);
+        self.centre += (f - self.centre) * smoothing(dt, 0.5);
+        self.whoosh *= (-dt / 0.55).exp();
+        if self.whoosh < 1e-4 {
+            self.whoosh = 0.0;
+        }
+    }
+
+    /// Stereo noise. `gain` is the preset's wind scale.
+    pub fn tick(&mut self, stir: f32, dive: f32, gain: f32, rng: &mut Rng) -> [f32; 2] {
+        let level = gain * (0.4 * stir * stir.sqrt() + 0.15 * dive);
+        let sweep = (self.centre * (0.35 + 2.2 * self.whoosh)).min(1.0);
+        let mut out = [0.0f32; 2];
+        for (c, o) in out.iter_mut().enumerate() {
+            self.lp[c] += 0.12 * (white(rng) - self.lp[c]);
+            let band = self.band[c].process(self.lp[c] * 2.5, self.centre, 0.9).bp;
+            let whoosh = self.whoosh_band[c].process(white(rng), sweep, 0.6).bp;
+            *o = band * level + whoosh * 0.6 * self.whoosh * self.whoosh;
+        }
+        out
+    }
+}

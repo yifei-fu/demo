@@ -31,6 +31,9 @@ pub struct Fdn {
     lp: [f32; LINES],
     damp: f32,
     flip: bool,
+    sample_rate: f32,
+    target_gain: [f32; LINES],
+    target_damp: f32,
 }
 
 impl Fdn {
@@ -43,18 +46,38 @@ impl Fdn {
             *l = next_prime(((BASE[i] * scale) as usize).max(prev + 1));
             prev = *l;
         }
-        let mut gain = [0.0; LINES];
-        for i in 0..LINES {
-            gain[i] = 10f32.powf(-3.0 * lens[i] as f32 / (sample_rate * rt60));
-        }
-        Fdn {
+        let mut fdn = Fdn {
             lines: lens.map(|n| vec![0.0; n]),
             pos: [0; LINES],
-            gain,
+            gain: [0.0; LINES],
             lp: [0.0; LINES],
-            damp: damp.clamp(0.0, 0.95),
+            damp: 0.0,
             flip: false,
+            sample_rate,
+            target_gain: [0.0; LINES],
+            target_damp: 0.0,
+        };
+        fdn.set_decay(rt60, damp);
+        fdn.gain = fdn.target_gain;
+        fdn.damp = fdn.target_damp;
+        fdn
+    }
+
+    /// New tail length and darkness; `glide` moves the network there without
+    /// a click. `rt60` in seconds, `damp` in 0..1 (higher = darker).
+    pub fn set_decay(&mut self, rt60: f32, damp: f32) {
+        for (g, line) in self.target_gain.iter_mut().zip(&self.lines) {
+            *g = 10f32.powf(-3.0 * line.len() as f32 / (self.sample_rate * rt60.max(0.05)));
         }
+        self.target_damp = damp.clamp(0.0, 0.95);
+    }
+
+    /// One control-rate step towards the target decay (`k` in 0..1).
+    pub fn glide(&mut self, k: f32) {
+        for (g, t) in self.gain.iter_mut().zip(&self.target_gain) {
+            *g += k * (t - *g);
+        }
+        self.damp += k * (self.target_damp - self.damp);
     }
 
     pub fn lengths(&self) -> [usize; LINES] {

@@ -3,10 +3,12 @@
 use axiom_core::anchors::{
     self, dot, eigenvalues, norm, rk4, Anchor, System, AIZAWA, KIND_COUNT, LORENZ, THOMAS, V3,
 };
-use axiom_core::law::{pure_law, write_params, Law, Placement, ANCHOR_COUNT, PARAMS_LEN};
+use axiom_core::law::{
+    pure_law, write_params, Law, Placement, ANCHOR_COUNT, PARAMS_LEN, RIM_ORDER,
+};
 use axiom_core::rng::Rng;
 use axiom_core::spectrum::{
-    kaplan_yorke, regime, Benettin, Spectrum, CYCLE, FIXED, LABYRINTH, STRANGE, TORUS,
+    classify_law, kaplan_yorke, regime, Benettin, Spectrum, CYCLE, FIXED, LABYRINTH, STRANGE, TORUS,
 };
 use axiom_core::synth::Synth;
 use axiom_core::tables::sample;
@@ -97,18 +99,34 @@ fn law_params_layout_is_valid() {
 }
 
 #[test]
-fn placement_is_a_seeded_permutation() {
+fn placement_is_a_seeded_cyclic_permutation() {
+    let neighbours = |o: &[usize; ANCHOR_COUNT]| {
+        let mut pairs: Vec<(usize, usize)> = (0..ANCHOR_COUNT)
+            .map(|i| {
+                let (a, b) = (o[i], o[(i + 1) % ANCHOR_COUNT]);
+                (a.min(b), a.max(b))
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    };
+    let reference = neighbours(&RIM_ORDER);
     for seed in 0..50 {
         let p = Placement::new(seed);
         let mut order = p.order.to_vec();
         order.sort_unstable();
         order.dedup();
         assert_eq!(order.len(), ANCHOR_COUNT, "every anchor once");
+        assert_eq!(
+            neighbours(&p.order),
+            reference,
+            "same neighbours, seed {seed}"
+        );
         let q = Placement::new(seed);
         assert_eq!((p.order, p.theta0), (q.order, q.theta0), "deterministic");
     }
-    let distinct: std::collections::HashSet<_> = (0..40).map(|s| Placement::new(s).order).collect();
-    assert!(distinct.len() > 10, "seeds must rearrange the rim");
+    let distinct: std::collections::HashSet<_> = (0..60).map(|s| Placement::new(s).order).collect();
+    assert!(distinct.len() >= 6, "seeds must still rearrange the rim");
 }
 
 #[test]
@@ -219,13 +237,108 @@ fn non_finite_input_is_mapped_to_the_centre() {
     );
 }
 
+// ------------------------------------------------------- the whole disk ---
+
+#[test]
+fn the_rim_is_alive_and_the_spokes_are_thin() {
+    // Where the piece is most alive nothing may settle to a point: at every
+    // radius from 0.7 out, at least 90 % of the angles keep moving.
+    let n = 72;
+    for seed in [1, 7, 13] {
+        for r in [0.7, 0.85, 1.0] {
+            let fixed = (0..n)
+                .filter(|i| {
+                    let theta = TAU * (*i as f64 + 0.5) / n as f64;
+                    let law = Law::from_block(&polar(r, theta, seed));
+                    classify_law(&law, 20.0, 30.0, 0.03).1 == FIXED
+                })
+                .count();
+            assert!(
+                fixed as f64 <= 0.10 * n as f64,
+                "seed {seed} r {r}: {fixed}/{n} angles are dead"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_regime_is_findable_on_the_disk() {
+    let n = 32;
+    let mut count = [0usize; 5];
+    let mut total = 0;
+    for j in 0..n {
+        for i in 0..n {
+            let (u, v) = (
+                (i as f64 + 0.5) / n as f64 * 2.0 - 1.0,
+                (j as f64 + 0.5) / n as f64 * 2.0 - 1.0,
+            );
+            if u * u + v * v <= 1.0 {
+                let law = Law::from_block(&block(u, v, 7));
+                count[classify_law(&law, 25.0, 100.0, 0.025).1 as usize] += 1;
+                total += 1;
+            }
+        }
+    }
+    let share = |code: u8| count[code as usize] as f64 / total as f64;
+    assert!(
+        share(FIXED) <= 0.20,
+        "fixed points cover {:.0} %",
+        100.0 * share(FIXED)
+    );
+    assert!(
+        share(CYCLE) >= 0.10,
+        "cycles: {:.1} %",
+        100.0 * share(CYCLE)
+    );
+    assert!(share(TORUS) >= 0.06, "tori: {:.1} %", 100.0 * share(TORUS));
+    assert!(
+        share(STRANGE) >= 0.25,
+        "strange: {:.1} %",
+        100.0 * share(STRANGE)
+    );
+    assert!(
+        share(LABYRINTH) >= 0.06,
+        "labyrinths: {:.1} %",
+        100.0 * share(LABYRINTH)
+    );
+}
+
+#[test]
+fn chaotic_attractors_move_at_a_lively_pace() {
+    // The engine's palette and forces assume 0.4–1.4 world units per second.
+    for kind in axiom_core::tables::ANCHORS {
+        let mut seen = 0;
+        for r in [0.6, 0.7, 0.8, 0.9, 1.0] {
+            let law = pure_law(kind, r);
+            if classify_law(&law, 20.0, 40.0, 0.03).1 < STRANGE {
+                continue;
+            }
+            seen += 1;
+            let mut b = Benettin::new([0.31, -0.22, 0.27], 0.0);
+            b.advance(&law, 0.03, 1_500);
+            let mut sum = 0.0;
+            for _ in 0..8_000 {
+                b.advance(&law, 0.03, 1);
+                sum += norm(law.field(b.x));
+            }
+            let speed = sum / 8_000.0;
+            assert!(
+                (0.4..=1.4).contains(&speed),
+                "{} at r={r}: mean speed {speed:.2}",
+                anchors::NAMES[kind]
+            );
+        }
+        assert!(seen > 0, "{} never turns chaotic", anchors::NAMES[kind]);
+    }
+}
+
 // ----------------------------------------------------- the centre point ---
 
 #[test]
 fn centre_is_a_stable_fixed_point_for_every_theta_and_seed() {
     // Any blend of any two anchors, in any seeded orientation: the origin is an
     // equilibrium and its linearisation decays. At r = 0.08 it still must.
-    for (r, margin) in [(1e-6, -0.8), (0.08, -0.15)] {
+    for (r, margin) in [(1e-6, -1.0), (0.08, -0.15)] {
         for seed in 0..300u32 {
             for i in 0..64 {
                 let theta = TAU * i as f64 / 64.0 + 0.013;
@@ -538,4 +651,172 @@ fn stir_and_shake_make_themselves_heard() {
     render_seconds(&mut s, 3.0, |_, _| {});
     let after = rms_of(&mut s, 0.5);
     assert!(after < 2.0 * calm, "the whoosh dies away: {after}");
+}
+
+// -------------------------------------------------------------- presets ---
+
+const PRESET_NAMES: [&str; 4] = ["classic", "ink", "prism", "abyss"];
+
+/// Largest sample-to-sample step of the next `secs`.
+fn max_step(s: &mut Synth, secs: f32) -> f32 {
+    let mut prev = [0.0f32; 2];
+    let mut worst = 0.0f32;
+    for _ in 0..(secs * SR / 128.0) as usize {
+        for f in s.render(128).chunks(2) {
+            worst = worst
+                .max((f[0] - prev[0]).abs())
+                .max((f[1] - prev[1]).abs());
+            prev = [f[0], f[1]];
+        }
+    }
+    worst
+}
+
+fn lorenz_law(seed: u32) -> [f32; PARAMS_LEN] {
+    let theta = Placement::new(seed)
+        .angle_of(LORENZ)
+        .expect("Lorenz is an anchor");
+    polar(0.8, theta, seed)
+}
+
+#[test]
+fn every_preset_is_finite_and_bounded_with_every_event() {
+    for (id, name) in PRESET_NAMES.iter().enumerate() {
+        for (i, (u, v)) in [(0.0, 0.0), (0.45, 0.1), (-0.3, 0.8), (0.9, -0.3)]
+            .into_iter()
+            .enumerate()
+        {
+            let seed = 30 + i as u32;
+            let mut s = Synth::new(SR, seed);
+            s.set(0, 1.0);
+            s.set(4, id as f32);
+            s.set_law(&block(u, v, seed));
+            let peak = render_seconds(&mut s, 8.0, |s, b| match b {
+                200 => s.set(1, 1.0),
+                600 => s.set(1, 0.0),
+                700 => s.set(3, 1.0),
+                900 => {
+                    s.set(2, 1.0);
+                    s.set(6, 0.1);
+                    s.set(7, 2.3);
+                }
+                1_100 => s.set_law(&block(-u, v * 0.5, seed)),
+                _ => {}
+            });
+            assert!(peak <= 0.9 + 1e-6, "{name} at ({u},{v}): peak {peak}");
+        }
+    }
+    // Unknown ids fall back to the classic voice.
+    let mut s = Synth::new(SR, 1);
+    s.set(4, 9.0);
+    assert_eq!(s.preset(), axiom_core::synth::Preset::Classic);
+}
+
+#[test]
+fn switching_presets_does_not_click() {
+    // Continuous voices only: Ink's plucks have a sharp attack by design.
+    let seed = 6;
+    for (from, to) in [(0, 2), (2, 3), (3, 0), (0, 3), (2, 0)] {
+        let mut s = Synth::new(SR, seed);
+        s.set(0, 1.0);
+        s.set(4, from as f32);
+        s.set_law(&lorenz_law(seed));
+        render_seconds(&mut s, 3.0, |_, _| {});
+        let before = max_step(&mut s, 1.0);
+        s.set(4, to as f32);
+        let during = max_step(&mut s, 1.5);
+        render_seconds(&mut s, 3.0, |_, _| {});
+        let after = max_step(&mut s, 1.0);
+        let steady = before.max(after);
+        assert!(
+            during <= 1.5 * steady + 0.03,
+            "{} -> {}: step {during} vs steady {steady}",
+            PRESET_NAMES[from],
+            PRESET_NAMES[to]
+        );
+    }
+    // Switching into and out of Ink adds nothing beyond a pluck's own attack.
+    let mut s = Synth::new(SR, seed);
+    s.set(0, 1.0);
+    s.set_law(&lorenz_law(seed));
+    render_seconds(&mut s, 3.0, |_, _| {});
+    s.set(4, 1.0);
+    let into = max_step(&mut s, 1.5);
+    render_seconds(&mut s, 3.0, |_, _| {});
+    let ink = max_step(&mut s, 3.0);
+    s.set(4, 0.0);
+    let out = max_step(&mut s, 1.5);
+    assert!(
+        into <= 1.3 * ink + 0.05 && out <= 1.3 * ink + 0.05,
+        "{into} {out} vs {ink}"
+    );
+}
+
+#[test]
+fn ink_plays_the_poincare_section() {
+    let seed = 6;
+    let theta = Placement::new(seed)
+        .angle_of(AIZAWA)
+        .expect("Aizawa is an anchor");
+    let plucks_per_second = |law: &[f32; PARAMS_LEN], secs: usize| -> Vec<u64> {
+        let mut s = Synth::new(SR, seed);
+        s.set(0, 1.0);
+        s.set(4, 1.0);
+        s.set_law(law);
+        render_seconds(&mut s, 4.0, |_, _| {});
+        let mut counts = Vec::new();
+        for _ in 0..secs {
+            let before = s.pluck_count();
+            render_seconds(&mut s, 1.0, |_, _| {});
+            counts.push(s.pluck_count() - before);
+        }
+        counts
+    };
+    // A fixed point never crosses the plane: silence.
+    assert_eq!(
+        plucks_per_second(&block(1e-6, 0.0, seed), 4)
+            .iter()
+            .sum::<u64>(),
+        0
+    );
+    // A cycle is a steady ostinato.
+    let cycle = plucks_per_second(&polar(0.4, theta, seed), 8);
+    let mean = cycle.iter().sum::<u64>() as f64 / 8.0;
+    assert!(mean >= 3.0, "cycle should ring out: {cycle:?}");
+    let spread = cycle
+        .iter()
+        .map(|c| (*c as f64 - mean).abs())
+        .fold(0.0, f64::max);
+    assert!(spread <= 0.35 * mean + 1.0, "steady rhythm: {cycle:?}");
+    // Chaos is busy but never a machine gun: the section hysteresis holds.
+    let chaos = plucks_per_second(&lorenz_law(seed), 8);
+    assert!(chaos.iter().all(|c| *c < 40), "{chaos:?}");
+    assert!(
+        chaos.iter().sum::<u64>() >= 8,
+        "chaos still plays: {chaos:?}"
+    );
+}
+
+#[test]
+fn presets_have_their_own_rooms() {
+    // Ink is dry (short tail), Abyss rings on: after the input stops, the
+    // reverb tail of Abyss must outlast Ink's by a wide margin.
+    let seed = 2;
+    let tail = |preset: f32| {
+        let mut s = Synth::new(SR, seed);
+        s.set(0, 1.0);
+        s.set(4, preset);
+        s.set_law(&lorenz_law(seed));
+        render_seconds(&mut s, 3.0, |_, _| {});
+        // silence the source: move to the fixed-point centre and let it settle
+        s.set_law(&block(1e-6, 0.0, seed));
+        render_seconds(&mut s, 2.0, |_, _| {});
+        rms_of(&mut s, 1.0)
+    };
+    assert!(
+        tail(3.0) > 2.0 * tail(1.0),
+        "abyss {} ink {}",
+        tail(3.0),
+        tail(1.0)
+    );
 }
