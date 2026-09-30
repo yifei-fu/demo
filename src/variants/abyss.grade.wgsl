@@ -37,12 +37,15 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let ph = ABYSS_TAU * fract(time * 0.001);
 
   // breath: 10 s, small, and lagging a little with distance from the centre
-  let breath = 1.0 + 0.08 * sin(ABYSS_TAU * (time * 0.1) - 0.5 * length(d));
+  let swell = sin(ABYSS_TAU * (time * 0.1) - 0.5 * length(d));
+  let breath = 1.0 + 0.08 * swell;
 
   // caustics drift slowly up-left across the frame
   let web = abyss_caustic(uv * vec2f(asp, 1.0) + vec2f(0.0, 0.0), ph);
 
   var c = hdr * breath * (1.0 + 0.10 * (web - 0.2));
+  // the brightest light swells a little more than the water around it: the nucleus breathes
+  c *= 1.0 + 0.10 * swell * smoothstep(1.0, 8.0, max(c.r, max(c.g, c.b)));
   let y = abyss_luma(c);
 
   // shadows lean toward teal-blue; chroma is pushed out ahead of the tonemap
@@ -55,7 +58,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   c = mix(c, max(y, 0.3 * m) * vec3f(0.42, 1.0, 0.92) / 0.86, 0.85 * hot);
 
   // depth haze: lifted teal blacks, keener toward the top of the frame, threaded with the caustic web
-  let above = 0.55 + 0.45 * (1.0 - uv.y);
-  let haze = vec3f(0.00030, 0.00160, 0.00200) * above * (0.75 + 1.2 * web) * (0.94 + 0.5 * (breath - 1.0));
+  let above = (0.55 + 0.45 * (1.0 - uv.y)) * (1.0 - 0.45 * smoothstep(0.15, 0.75, length(d)));
+  let haze = vec3f(0.00026, 0.00135, 0.00180) * above * (0.75 + 1.2 * web) * (0.94 + 0.5 * (breath - 1.0));
   return c + haze;
 }

@@ -5,9 +5,8 @@
 
 const INK_PAPER: vec3f = vec3f(0.863, 0.815, 0.738);    // #efe9df in linear light
 const INK_BLACK: vec3f = vec3f(0.0034, 0.0044, 0.0088); // dense sumi: cool, never quite neutral
-const INK_SEAL_BLACK: vec3f = vec3f(0.16, 0.010, 0.008);
-const INK_K: f32 = 1.7;
-const INK_GAMMA: f32 = 0.62;   // < 1 opens up the thin washes; dense ink still saturates to black
+const INK_K: f32 = 3.0;
+const INK_GAMMA: f32 = 0.85;   // < 1 opens up the thin washes; dense ink still saturates to black
 
 // ------------------------------------------------------------------ paper
 fn ink_hash(p: vec2i) -> f32 {
@@ -74,7 +73,6 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // wash feels the paper's tooth, so a quick stroke dries into fibres instead of fading smoothly.
   let m = (hdr.r + hdr.g + hdr.b) * (1.0 / 3.0);
   let chroma = hdr / max(m, 1e-5);
-  let seal = smoothstep(0.55, 0.25, chroma.r);
   // the toe keeps a lone particle from reading as a digital dot; a wash of several still reads
   var mg = pow(m, INK_GAMMA);
   mg *= 0.35 + 0.65 * smoothstep(0.08, 0.35, mg);
@@ -84,9 +82,8 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let warm = vec3f(0.93, 1.00, 1.10);
   let cool = vec3f(1.10, 1.00, 0.86);
   let spectrum = mix(warm, cool, smoothstep(0.20, 1.6, mg));
-  let load = chroma * mg * mix(spectrum, vec3f(1.0), seal) * feel;
+  let load = chroma * mg * spectrum * feel;
   let t = exp(-INK_K * load);
 
-  let floor_c = mix(INK_BLACK, INK_SEAL_BLACK, seal);
-  return floor_c + (paper - floor_c) * t;
+  return INK_BLACK + (paper - INK_BLACK) * t;
 }

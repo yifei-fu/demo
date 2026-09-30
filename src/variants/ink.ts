@@ -13,7 +13,7 @@ export const variant: Variant = {
   render: {
     exposure: 7,
     trail: 0.9,
-    dof: 1.1,
+    dof: 2,
     bloom: 8,
     grain: 0.004,
     aberration: 0,

@@ -23,6 +23,8 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   } else {
     let jitter = (phase - 0.5) * 0.10 + (seed - 0.5) * 0.06;
     c = abyss_ramp(clamp(s + jitter, 0.0, 1.0));
+    // a particle all but at rest is the nucleus of the thing: it burns cyan, not the blue of slow drift
+    c = mix(c, vec3f(0.02, 0.58, 0.78), (1.0 - smoothstep(0.02, 0.07, speed)) * 0.9);
   }
   // water eats red, then green: far light slides toward blue and dims, near light is a touch keener
   let far = max(depth, 0.0);

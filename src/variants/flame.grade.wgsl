@@ -17,12 +17,13 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
 
   // dim warm light cools to ember red rather than to brown; violet is left alone
   let warm = smoothstep(0.35, 0.75, c.r / max(c.r + c.g + c.b, 1e-4));
-  let cooling = (1.0 - smoothstep(0.03, 1.4, y)) * warm;
-  c *= mix(vec3f(1.0), vec3f(1.20, 0.66, 0.58), cooling);
+  let cooling = (1.0 - smoothstep(0.02, 0.6, y)) * warm;
+  c *= mix(vec3f(1.0), vec3f(1.12, 0.78, 0.70), cooling);
 
   // heat: a lot of light pushes any hue toward white-gold, so the single point is a star
-  let heat = smoothstep(1.0, 14.0, y);
-  c = mix(c, vec3f(1.0, 0.80, 0.52) * y, heat * 0.9);
+  let heat = smoothstep(0.8, 10.0, y);
+  let ember = mix(vec3f(1.0, 0.62, 0.28), vec3f(1.0, 0.84, 0.58), smoothstep(2.0, 30.0, y));
+  c = mix(c, ember * y, heat * 0.9);
 
   // halation: red-orange bleed as a function of luminance, since a grade cannot blur
   let bleed = 0.16 * y / (1.0 + 0.12 * y) * smoothstep(0.25, 2.0, y);

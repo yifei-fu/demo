@@ -30,7 +30,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   c = 0.18 * pow(max(c, vec3f(0.0)) / 0.18, vec3f(1.08));
   // cool the shadows
   let shadow = 1.0 - smoothstep(0.02, 0.4, y0);
-  c = mix(c, c * vec3f(0.80, 0.94, 1.22), shadow * 0.65);
+  c = mix(c, c * vec3f(0.86, 0.92, 1.24), shadow * 0.65);
   // pastel film keeps its chroma through AgX
   let y1 = prism_lum(c);
   c = max(mix(vec3f(y1), c, 1.22), vec3f(0.0));
@@ -39,7 +39,7 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let octaves = 5.0 - log2(max(y1, 0.5));
   let d = 270.0 + 85.0 * clamp(octaves, 0.0, 6.0) + 26.0 * uv.x + 16.0 * uv.y + 8.0 * sin(6.2831853 * time / 50.0);
   let veil = mix(vec3f(1.0), prism_film(d), 0.85);
-  let hi = smoothstep(0.5, 5.0, y1);
+  let hi = smoothstep(0.35, 4.0, y1);
   c = mix(c, veil * (y1 + 0.5 * hi), hi * 0.85);
   return max(c, vec3f(0.0));
 }
