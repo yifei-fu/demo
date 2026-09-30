@@ -11,6 +11,9 @@ import { LAW_LEN } from './law';
 import type { Core, SpectrumReading } from './wasm';
 
 const STIR_STRENGTH = 1;
+/** Extra trail persistence at full dive (the steadier the camera, the more it applies). */
+const DIVE_TRAIL = 0.09;
+const MAX_TRAIL = 0.95;
 /** Simulated seconds run at load, before the first frame is drawn. */
 const WARMUP_SECONDS = 7;
 const WARMUP_DT = 0.06;
@@ -140,6 +143,8 @@ export class Engine {
     this.spectrum = this.core.spectrumRead();
     this.particles.setLaw(this.law);
     this.framing.update(this.particles.extent.value, dt);
+    this.particles.refSpeed = this.framing.refSpeed;
+    this.particles.equalise = this.framing.equalise;
     const cam = this.rig.update(
       input,
       dt,
@@ -177,7 +182,13 @@ export class Engine {
       const breath = 1 + breathAmp * Math.sin((this.time * Math.PI * 2) / 6.5);
       const fs = this.frameSettings;
       Object.assign(fs, s);
-      fs.trail = Math.min((s.trail + this.trailBias) * still, n / (n + 1));
+      // a held dive is a steady view of a noisy, sparse volume: average it over more frames
+      fs.trail = Math.min(
+        Math.min(MAX_TRAIL, s.trail + this.trailBias + DIVE_TRAIL * cam.dive) * still,
+        n / (n + 1),
+      );
+      fs.dive = cam.dive;
+      fs.zoom = Math.min(MAX_ZOOM_GAIN, (DIST_FAR / cam.dist) ** ZOOM_GAIN_POWER);
       fs.breath = breath * (1 - MAP_DIM * this.mapAmount);
       this.post.encode(
         enc,
@@ -185,7 +196,6 @@ export class Engine {
         fs,
         this.particles.active,
         this.time,
-        Math.min(MAX_ZOOM_GAIN, (DIST_FAR / cam.dist) ** ZOOM_GAIN_POWER),
       );
       this.beadPos[0] = this.bead.u;
       this.beadPos[1] = this.bead.v;

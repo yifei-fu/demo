@@ -6,6 +6,8 @@ struct Post {
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
   c: vec4f,     // pixels per particle, breath
   bg: vec4f,    // background, linear
+  t: vec4f,     // clarity, dive
+  tint: vec4f,  // bloom tint (linear multiplier)
 }
 
 // How splatted density becomes light: a power law that opens up wisps and filaments, bending to a
@@ -81,10 +83,38 @@ fn denoised(ip: vec2i) -> vec4f {
   return acc / wsum;
 }
 
+// The same idea with a wider reach, for a dive: the near field is a soft volume seen through a
+// great many sparse samples, so it is averaged over a larger neighbourhood with a looser tolerance.
+fn denoised_wide(ip: vec2i, reach: i32) -> vec4f {
+  let mid = cell(ip);
+  let n0 = mid.w / FIXED;
+  let sigma2 = DENOISE_SIGMA2 * (1.0 + 2.0 * P.t.y);
+  var acc = mid * 3.0;
+  var wsum = 3.0;
+  for (var j = -reach; j <= reach; j++) {
+    for (var i = -reach; i <= reach; i++) {
+      if (i == 0 && j == 0) { continue; }
+      let c = cell(ip + vec2i(i, j));
+      let dn = (c.w - mid.w) / FIXED;
+      let dist = length(vec2f(f32(i), f32(j)));
+      let spatial = max(0.0, 1.0 - dist / (f32(reach) + 1.0));
+      let w = spatial * exp(-dn * dn / (2.0 * sigma2 * (n0 + 1.0)));
+      acc += c * w;
+      wsum += w;
+    }
+  }
+  return acc / wsum;
+}
+
 @fragment
 fn fs_resolve(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let ip = vec2i(pos.xy);
-  let cur = density(denoised(ip));
+  var cur = vec3f(0.0);
+  if (P.t.y < 0.05) {
+    cur = density(denoised(ip));
+  } else {
+    cur = density(denoised_wide(ip, 1 + i32(round(P.t.y * 2.0))));
+  }
 
   let prev = textureLoad(prevTex, ip, 0).rgb;
   // exponential moving average: a longer effective exposure and light-painted trails
@@ -156,6 +186,10 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 @group(0) @binding(1) var hdrTex: texture_2d<f32>;
 @group(0) @binding(2) var bloomTex: texture_2d<f32>;
 @group(0) @binding(3) var csamp: sampler;
+@group(0) @binding(4) var clarTex: texture_2d<f32>;
+
+// Display headroom relative to SDR white (1.0 on SDR): a variant's grade() may use it.
+fn axiom_headroom() -> f32 { return P.b.z; }
 
 override HDR_OUT: bool = false;
 override DIRECT: bool = false;  // the variant's grade() is the final colour: no background, no AgX
@@ -217,7 +251,12 @@ fn fs_composite(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   );
   let bloom = textureSampleLevel(bloomTex, csamp, uv, 0.0).rgb;
   let vig = 1.0 - P.b.x * smoothstep(0.25, 1.05, r2);
-  var lin = (c * P.a.x * P.c.y + bloom * P.a.z) * vig;
+  let gain = P.a.x * P.c.y;
+  // clarity: add back what a wide blur of the light takes out, so filaments stay legible inside
+  // dense, volume-filling chaos (an unsharp mask on the scene-referred light, before the finish)
+  let wide = textureSampleLevel(clarTex, csamp, uv, 0.0).rgb;
+  let body = max(c + P.t.x * (c - wide), vec3f(0.0)) * gain;
+  var lin = (body + bloom * P.a.z * P.tint.rgb) * vig;
 
   // the variant's finish (its own file): scene-referred for AgX, or the final colour when direct
   lin = grade(lin, uv, P.b.w);

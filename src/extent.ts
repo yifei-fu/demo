@@ -8,18 +8,25 @@
 
 const HIST_BINS = 32;
 const HIST_RANGE = 2;
-const WORDS = 4 + HIST_BINS;
+const SPEED_BINS = 48;
+const SPEED_BASE = -8;
+const SPEED_PER_OCTAVE = 3;
+const WORDS = 4 + HIST_BINS + SPEED_BINS;
 const BYTES = WORDS * 4;
 const POS_FIXED = 16384;
 const MIN_SAMPLES = 96;
 /** Fraction of the sample the reported radius must enclose. */
 const PERCENTILE = 0.9;
+/** The reference speed is this percentile of the sampled speeds: the slowest 40 % are dimmed. */
+const SPEED_PERCENTILE = 0.4;
 
 export interface Extent {
   /** centroid of the settled particles */
   center: [number, number, number];
   /** radius around the centroid that encloses PERCENTILE of them */
   radius: number;
+  /** a typical (slowish) speed of the settled particles, in world units per second */
+  speed: number;
 }
 
 export class ExtentProbe {
@@ -30,7 +37,7 @@ export class ExtentProbe {
   private pending: Promise<void> | null = null;
   private wanted = false;
   private latest: Extent | null = null;
-  private readonly out: Extent = { center: [0, 0, 0], radius: 0 };
+  private readonly out: Extent = { center: [0, 0, 0], radius: 0, speed: 0 };
 
   constructor(device: GPUDevice) {
     this.buffer = device.createBuffer({
@@ -97,6 +104,16 @@ export class ExtentProbe {
     while (bin < HIST_BINS - 1 && seen + w[4 + bin] < target) seen += w[4 + bin++];
     const inBin = w[4 + bin] || 1;
     this.out.radius = ((bin + (target - seen) / inBin) * HIST_RANGE) / HIST_BINS;
+
+    const seenTarget = SPEED_PERCENTILE * n;
+    let sSeen = 0;
+    let sBin = 0;
+    const sBase = 4 + HIST_BINS;
+    while (sBin < SPEED_BINS - 1 && sSeen + w[sBase + sBin] < seenTarget)
+      sSeen += w[sBase + sBin++];
+    const sIn = w[sBase + sBin] || 1;
+    const octave = sBin + (seenTarget - sSeen) / sIn;
+    this.out.speed = 2 ** (SPEED_BASE + octave / SPEED_PER_OCTAVE);
 
     // the next histogram is measured from where the cloud actually is
     this.probe[0] = c[0];

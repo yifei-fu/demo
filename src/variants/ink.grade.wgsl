@@ -6,7 +6,7 @@
 const INK_PAPER: vec3f = vec3f(0.863, 0.815, 0.738);    // #efe9df in linear light
 const INK_BLACK: vec3f = vec3f(0.0034, 0.0044, 0.0088); // dense sumi: cool, never quite neutral
 const INK_K: f32 = 3.2;
-const INK_GAMMA: f32 = 0.78;   // < 1 opens up the thin washes; dense ink still saturates to black
+const INK_GAMMA: f32 = 0.68;   // < 1 opens up the thin washes; dense ink still saturates to black
 
 // ------------------------------------------------------------------ paper
 fn ink_hash(p: vec2i) -> f32 {
@@ -75,10 +75,14 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   let chroma = hdr / max(m, 1e-5);
   // the toe keeps a lone particle from reading as a digital dot; a wash of several still reads
   var mg = pow(m, INK_GAMMA);
-  mg *= 0.50 + 0.50 * smoothstep(0.06, 0.30, mg);
-  let dry = 1.0 - smoothstep(0.05, 0.9, mg);
+  mg *= 0.34 + 0.66 * smoothstep(0.05, 0.55, mg);
+  // the shoulder: a pooled dwell point keeps a gradient, navy at its rim and black at its heart
+  mg = select(mg, 1.0 + 0.55 * log(max(mg, 1.0)), mg > 1.0);
+  // the foot of the sheet stays quiet, so the readout under the lens keeps its paper
+  mg *= 1.0 - 0.45 * smoothstep(0.80, 0.97, uv.y);
+  let dry = 1.0 - smoothstep(0.02, 0.22, mg);
   let tooth = clamp(grainy * 0.8 - fibres * 0.25, 0.0, 1.0);
-  let feel = 1.0 + dry * 1.1 * (tooth - 0.5);
+  let feel = 1.0 + dry * 1.3 * (tooth - 0.5);
   let warm = vec3f(0.93, 1.00, 1.10);
   let cool = vec3f(1.10, 1.00, 0.86);
   let spectrum = mix(warm, cool, smoothstep(0.20, 1.6, mg));

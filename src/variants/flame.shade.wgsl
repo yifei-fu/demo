@@ -22,18 +22,33 @@ fn flame_ember(t: f32, tint: f32) -> vec3f {
 fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let s = clamp(log2(max(speed, 0.04) / 0.08) / 4.9, 0.0, 1.0);
   let near = clamp(-depth, -1.2, 1.2);
+  let glow = clamp(-depth, 0.0, 3.0);     // in front of the focal plane: a bokeh disc
+  let far = clamp(depth, 0.0, 2.0);
+  let focus = 1.0 - smoothstep(0.05, 0.7, abs(depth));  // on the focal plane a thread is crisp and hot
+
   // about 15% of particles are cool embers: more of them far away, fewer near, so the far side of the
   // cloud cools toward violet while the near side stays fire
   let cool = phase > 0.85 + 0.04 * (seed - 0.5) + 0.06 * clamp(near, -1.0, 1.0);
+  // and about 5% are sparks: hotter and brighter, so that out of focus they become glowing discs
+  let spark = select(0.0, 1.0, phase > 0.30 && phase < 0.35);
+
   let jitter = 0.16 * (fract(phase * 7.31) - 0.5);
-  let t = clamp(s + jitter + 0.14 * near + 0.05 * (seed - 0.5), 0.0, 1.0);
+  let t = clamp(s + jitter + 0.16 * near - 0.08 * far + 0.10 * focus + 0.25 * spark + 0.05 * (seed - 0.5), 0.0, 1.0);
   var c = flame_heat(t);
   // slow embers stay dim so that a dense red coal is not tinted pink by them
   if (cool) { c = flame_ember(clamp(s + 0.14 * near, 0.0, 1.0), seed) * mix(0.5, 1.8, smoothstep(0.1, 0.6, s)); }
+
+  // distant light is ash: it cools toward a violet grey, which opens dark voids behind the fire
+  c = mix(c, vec3f(0.42, 0.10, 0.24), 0.3 * smoothstep(0.4, 1.4, far));
+
+  // speed sets the burn: slow pile-ups smoulder, fast threads run hot
+  let burn = mix(0.7, 1.5, smoothstep(0.0, 0.8, s));
   // a particle that has come to rest has burned down into the one point: it ignites, and as the
   // point opens into a loop (Hopf) the star cools through orange to the crimson of a slow coal
   let star = 1.0 - smoothstep(0.02, 0.12, speed);
-  c = mix(c, vec3f(2.0, 1.10, 0.42), star);
-  let fade = exp(-0.50 * max(depth, 0.0)) * (1.0 + 0.45 * clamp(-depth, 0.0, 1.0));
-  return c * fade;
+  c = mix(c, vec3f(1.7, 0.90, 0.33), star);
+
+  // near light glows, far light fades
+  let depth_gain = exp(-0.25 * far) * (1.0 + 0.5 * glow) * (1.0 + 1.6 * spark);
+  return c * mix(burn, 1.0, star) * depth_gain;
 }

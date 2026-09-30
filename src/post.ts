@@ -5,7 +5,9 @@ import type { Variant } from './variants/types';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 const BLOOM_LEVELS = 5;
-const UNIFORM_FLOATS = 20;
+const UNIFORM_FLOATS = 28;
+/** The unsharp mask's blur: three halvings, about a sixteenth of the screen wide in radius. */
+const CLARITY_LEVELS = 3;
 const VIGNETTE = 0.42;
 const ACCUM_BYTES_PER_PIXEL = 16;
 export interface PostSettings {
@@ -20,6 +22,14 @@ export interface PostSettings {
   ca: number;
   /** Slow multiplicative pulse on the exposure. */
   breath: number;
+  /** Local contrast: 0 off, ~1 a strong unsharp mask of the light. */
+  clarity: number;
+  /** Linear multiplier on the bloom term only. */
+  bloomTint: readonly [number, number, number];
+  /** 0..1 how far the camera has dived; widens the denoise. */
+  dive: number;
+  /** Density lift for a magnified view (diving, or a camera pulled back). */
+  zoom: number;
 }
 
 /** Per-frame finish settings for a variant. The engine adds breath and dimming on top. */
@@ -33,6 +43,10 @@ export function settingsFor(v: Variant): PostSettings {
     vignette: VIGNETTE,
     ca: r.aberration,
     breath: 1,
+    clarity: r.clarity ?? 0,
+    bloomTint: r.bloomTint ?? [1, 1, 1],
+    dive: 0,
+    zoom: 1,
   };
 }
 
@@ -60,6 +74,8 @@ export class Post {
   private accumBuf: GPUBuffer | null = null;
   private hdr: Level[] = [];
   private bloom: Level[] = [];
+  private clarity: Level[] = [];
+  private clarBG: GPUBindGroup[] = [];
   private resolveBG: GPUBindGroup[] = [];
   private downFirstBG: GPUBindGroup[] = [];
   private downBG: GPUBindGroup[] = [];
@@ -138,12 +154,14 @@ export class Post {
     });
     this.hdr = [this.level(width, height, 'hdr a'), this.level(width, height, 'hdr b')];
     this.bloom = [];
+    this.clarity = [];
     let w = width;
     let h = height;
     for (let i = 0; i < BLOOM_LEVELS; i++) {
       w = Math.max(1, w >> 1);
       h = Math.max(1, h >> 1);
       this.bloom.push(this.level(w, h, `bloom ${i}`));
+      if (i < CLARITY_LEVELS) this.clarity.push(this.level(w, h, `clarity ${i}`));
     }
 
     const pb = { binding: 0, resource: { buffer: this.params } };
@@ -187,6 +205,26 @@ export class Post {
         }),
       );
     }
+    // clarity chain: hdr -> 1/2 -> 1/4 -> 1/8 with the plain 4-tap downsample (no threshold)
+    this.clarBG = [0, 1].map((i) =>
+      device.createBindGroup({
+        layout: this.downPipe.getBindGroupLayout(0),
+        entries: [
+          { binding: 1, resource: view(this.hdr[i]) },
+          { binding: 2, resource: smp },
+        ],
+      }),
+    );
+    for (let i = 1; i < CLARITY_LEVELS; i++)
+      this.clarBG.push(
+        device.createBindGroup({
+          layout: this.downPipe.getBindGroupLayout(0),
+          entries: [
+            { binding: 1, resource: view(this.clarity[i - 1]) },
+            { binding: 2, resource: smp },
+          ],
+        }),
+      );
     this.compositeBG = [0, 1].map((i) =>
       device.createBindGroup({
         layout: this.compositePipe.getBindGroupLayout(0),
@@ -195,6 +233,7 @@ export class Post {
           { binding: 1, resource: view(this.hdr[i]) },
           { binding: 2, resource: view(this.bloom[0]) },
           { binding: 3, resource: smp },
+          { binding: 4, resource: view(this.clarity[CLARITY_LEVELS - 1]) },
         ],
       }),
     );
@@ -211,15 +250,16 @@ export class Post {
     s: PostSettings,
     particleCount: number,
     time: number,
-    zoom = 1,
   ): void {
     const d = this.data;
     d.set([this.width, this.height, 1 / this.width, 1 / this.height], 0);
     d.set([s.exposure, s.trail, s.bloom, s.grain], 4);
     d.set([s.vignette, s.ca, this.gpu.hdrHeadroom, time % 1000], 8);
     // zoom: diving spreads the same light over more pixels; lift the density so it stays lit
-    d.set([(zoom * this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
-    d.set([...this.background, 0], 16);
+    d.set([(s.zoom * this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
+    d.set(this.background, 16);
+    d.set([s.clarity, s.dive, 0, 0], 20);
+    d.set(s.bloomTint, 24);
     this.device.queue.writeBuffer(this.params, 0, d);
 
     const cur = this.flip;
@@ -241,6 +281,11 @@ export class Post {
     };
 
     full(this.hdr[cur].view, this.resolvePipe, this.resolveBG[cur]);
+    if (s.clarity !== 0) {
+      full(this.clarity[0].view, this.downPipe, this.clarBG[cur]);
+      for (let i = 1; i < CLARITY_LEVELS; i++)
+        full(this.clarity[i].view, this.downPipe, this.clarBG[2 + i - 1]);
+    }
     full(this.bloom[0].view, this.downFirstPipe, this.downFirstBG[cur]);
     for (let i = 1; i < BLOOM_LEVELS; i++)
       full(this.bloom[i].view, this.downPipe, this.downBG[i - 1]);
@@ -262,6 +307,6 @@ export class Post {
 
   private destroy(): void {
     this.accumBuf?.destroy();
-    for (const l of [...this.hdr, ...this.bloom]) l.tex.destroy();
+    for (const l of [...this.hdr, ...this.bloom, ...this.clarity]) l.tex.destroy();
   }
 }

@@ -2,19 +2,22 @@
 // Visual-QA harness for AXIOM. Drives the engine through window.__axiom (docs/DESIGN.md §5),
 // writes screenshots + contact sheets, and exits 1 on any console/page error or failed check.
 //
-//   node scripts/shots.mjs [--mode grid|sweep|sensors|gate|variants|hero|all] [--desktop] [--v a,b]
+//   node scripts/shots.mjs [--mode grid|sweep|sensors|gate|variants|hero|film|all] [--desktop] [--v a,b]
 //        [--n 65536] [--seed 1] [--frames 180] [--query "k=v&k=v"] [--out dir]
 //        [--url base | --port 5172]
 //
 //   all      = grid, sweep, sensors, gate (any mode list may be comma-separated)
 //   variants = matrix sheet, rows = every --v id (required), columns = 7 fixed positions
-//   hero     = per --v id, three phone stills at 430x932 @2x plus a triptych (slow;
+//   hero     = per --v id, four clean phone stills at 430x932 @2x plus a 4-up (slow;
 //              defaults n=262144, frames=300)
+//   film     = per --v id, a silent clip of a scripted bead journey (clean, 430x932 @1.5x,
+//              n=196608); --duration 12 (s) --fps 30 --frames 120 (warm-up); encoded with the
+//              ffmpeg that ships with playwright (or $FFMPEG / PATH) into <id>_film.webm
 //
 // Logs go to stderr; the final JSON summary goes to stdout (and <out>/summary.json).
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +36,8 @@ const { values: a } = parseArgs({
     n: { type: 'string' },
     seed: { type: 'string', default: '1' },
     frames: { type: 'string' },
+    duration: { type: 'string' },
+    fps: { type: 'string' },
     query: { type: 'string' },
     desktop: { type: 'boolean', default: false },
     mode: { type: 'string', default: 'all' },
@@ -40,7 +45,7 @@ const { values: a } = parseArgs({
   },
 });
 const ALL_MODES = ['grid', 'sweep', 'sensors', 'gate'];
-const MODE_NAMES = [...ALL_MODES, 'variants', 'hero'];
+const MODE_NAMES = [...ALL_MODES, 'variants', 'hero', 'film'];
 const modes = a.mode === 'all' ? ALL_MODES : a.mode.split(',');
 const die = (msg) => (console.error(msg), process.exit(2));
 const badMode = modes.find((m) => !MODE_NAMES.includes(m));
@@ -73,12 +78,17 @@ const GPU_ENV =
 // Per-mode defaults; explicit flags always win. `variants` skips the expensive map warm-up.
 const MODE_DEFAULTS = {
   hero: { n: 262144, frames: 300 },
+  film: { n: 196608, frames: 120 },
   variants: { query: 'mapn=32' },
 };
+const ALWAYS_QUERY = { hero: 'clean', film: 'clean' }; // `clean` hides the HUD; --query cannot drop it
 const cfg = (mode) => ({
   n: Number(a.n ?? MODE_DEFAULTS[mode]?.n ?? 65536),
   frames: Number(a.frames ?? MODE_DEFAULTS[mode]?.frames ?? 180),
-  query: (a.query ?? MODE_DEFAULTS[mode]?.query ?? '').replace(/^[?&]+/, ''),
+  query: [ALWAYS_QUERY[mode], a.query ?? MODE_DEFAULTS[mode]?.query]
+    .map((q) => (q ?? '').replace(/^[?&]+/, ''))
+    .filter(Boolean)
+    .join('&'),
 });
 const sheetWidth = (dflt) => Number(a.sheet ?? dflt);
 const PHONE = {
@@ -591,23 +601,16 @@ async function gate(ctxs, v, pre) {
   const { browser, base, out } = ctxs;
   const label = `gate${v ? `[${v}]` : ''}`;
   const C = cfg('gate');
-  const settle = (page) => page.waitForTimeout(1500);
   const text = (page) => page.evaluate(() => document.body.innerText.trim());
-  const start = await withPage(
-    browser,
-    base,
-    label,
-    v,
-    { ...C, gate: true, ready: false },
-    async (page) => {
-      await settle(page);
-      const file = join(out, `${pre}gate_start.png`);
-      await page.screenshot({ path: file });
-      const t = await text(page);
-      check(label, 'start gate shows text', t.length > 0, JSON.stringify(t.slice(0, 60)));
-      return file;
-    },
-  );
+  // The engine warms up behind the gate: wait for `ready` (withPage), then let the fade-in finish.
+  const start = await withPage(browser, base, label, v, { ...C, gate: true }, async (page) => {
+    await page.waitForTimeout(1000);
+    const file = join(out, `${pre}gate_start.png`);
+    await page.screenshot({ path: file });
+    const t = await text(page);
+    check(label, 'start gate shows text', t.length > 0, JSON.stringify(t.slice(0, 60)));
+    return file;
+  });
   const fallback = await withPage(
     browser,
     base,
@@ -615,7 +618,7 @@ async function gate(ctxs, v, pre) {
     v,
     { ...C, gate: true, gpu: false, ready: false },
     async (page) => {
-      await settle(page);
+      await page.waitForTimeout(1500); // no engine, so nothing to wait for
       const file = join(out, `${pre}gate_nowebgpu.png`);
       await page.screenshot({ path: file });
       const t = await text(page);
@@ -634,11 +637,10 @@ async function gate(ctxs, v, pre) {
 // One place for the named spots on the disk used by `variants` and `hero`.
 const SPOTS = {
   centre: { label: 'centre r=0', u: 0, v: 0 },
-  hopf: { label: 'Hopf / cycle', u: 0, v: 0.45 },
-  torus: { label: 'torus', u: -0.46, v: 0 },
+  loop: { label: 'loop (Hopf cycle)', u: -0.46, v: 0 },
   lorenz: { label: 'Lorenz strange', u: 0.64, v: 0.64 },
   rossler: { label: 'Rössler', u: -0.9, v: 0 },
-  thomas: { label: 'Thomas labyrinth', u: 0.64, v: -0.64 },
+  labyrinth: { label: 'Thomas labyrinth', u: 0.64, v: -0.64 },
   dive: { label: 'Lorenz, dive 0.7', u: 0.64, v: 0.64, dive: 0.7 },
 };
 const regimeLine = (s) => `${REGIMES[s.regime] ?? '–'}  D ${f2(s.dky)}`;
@@ -660,46 +662,51 @@ async function shootSpots(page, C, keys, fileFor) {
   return shots;
 }
 
-// Rows = every --v id, columns = 7 spots; plus one row of start-gate shots.
+// One variant's row of the matrix: its start gate, then every spot on a fresh page.
+async function variantRow({ browser, base, tool, out }, C, id, keys) {
+  const label = `variants[${id}]`;
+  // The engine warms up behind the gate: `ready` (withPage), then let the fade-in finish.
+  const gate = await withPage(browser, base, label, id, { ...C, gate: true }, async (page) => {
+    await page.waitForTimeout(1000);
+    const name = await page.evaluate(
+      () => document.querySelector('nav.variants .on')?.textContent ?? null,
+    );
+    return { name, png: await page.screenshot({ path: join(out, `variants_${id}_gate.png`) }) };
+  });
+  const shots = await withPage(browser, base, label, id, C, (page) =>
+    shootSpots(page, C, keys, (k) => join(out, `variants_${id}_${k}.png`)),
+  );
+  check(
+    label,
+    'engine loaded the requested variant',
+    shots.every((x) => x.s.variant === id),
+    shots[0].s.variant,
+  );
+  const an = await analyze(
+    tool,
+    shots.map((x) => x.png),
+  );
+  an.forEach((x, i) => warnIfBlank(label, `${id} ${keys[i]}`, x));
+  return { id, gate, shots };
+}
+
+// Rows = every --v id, columns = the spots above; plus one row of start-gate shots.
 async function variants(ctxs) {
-  const { browser, base, tool, out } = ctxs;
+  const { tool, out } = ctxs;
   const C = cfg('variants');
   const keys = Object.keys(SPOTS);
   const rows = [];
+  const failed = [];
   for (const id of OPT.variants) {
-    const label = `variants[${id}]`;
     log(`  -- ${id}`);
-    const gate = await withPage(
-      browser,
-      base,
-      label,
-      id,
-      { ...C, gate: true, ready: false },
-      async (page) => {
-        await page.waitForSelector('nav.variants', { timeout: 30_000 }).catch(() => {});
-        await page.waitForTimeout(1500);
-        const name = await page.evaluate(
-          () => document.querySelector('nav.variants .on')?.textContent ?? null,
-        );
-        return { name, png: await page.screenshot({ path: join(out, `variants_${id}_gate.png`) }) };
-      },
-    );
-    const shots = await withPage(browser, base, label, id, C, (page) =>
-      shootSpots(page, C, keys, (k) => join(out, `variants_${id}_${k}.png`)),
-    );
-    check(
-      label,
-      'engine loaded the requested variant',
-      shots.every((x) => x.s.variant === id),
-      shots[0].s.variant,
-    );
-    const an = await analyze(
-      tool,
-      shots.map((x) => x.png),
-    );
-    an.forEach((x, i) => warnIfBlank(label, `${id} ${keys[i]}`, x));
-    rows.push({ id, gate, shots });
+    try {
+      rows.push(await variantRow(ctxs, C, id, keys));
+    } catch (e) {
+      failed.push(`${id}: ${e?.message ?? e}`);
+      report(`variants[${id}]`, 'crashed', String(e?.message ?? e));
+    }
   }
+  if (!rows.length) throw new Error(`no variant rendered: ${failed.join('; ')}`);
   const width = sheetWidth(1800);
   const suffix = `n=${C.n} frames=${C.frames} seed=${OPT.seed}${C.query ? ` ${C.query}` : ''}`;
   const matrix = await contactSheet(tool, join(out, 'variants_matrix.png'), {
@@ -721,18 +728,19 @@ async function variants(ctxs) {
   return {
     matrix,
     gates,
+    failed,
     rows: rows.map(
       (r) => `${r.id}: ${r.shots.map((x) => `${x.key} ${regimeLine(x.s)}`).join(' | ')}`,
     ),
   };
 }
 
-// Presentation stills: 3 spots at 430x932 @2x, full-resolution PNGs + a triptych per variant.
+// Presentation stills: 4 spots at 430x932 @2x, HUD hidden (`clean`): full-resolution PNGs + a 4-up.
 async function hero(ctxs, v, pre) {
   const { browser, base, tool, out } = ctxs;
   const C = cfg('hero');
   const label = `hero${v ? `[${v}]` : ''}`;
-  const keys = ['hopf', 'lorenz', 'thomas'];
+  const keys = ['loop', 'lorenz', 'labyrinth', 'dive'];
   const shots = await withPage(browser, base, label, v, { ...C, device: HERO }, (page) =>
     shootSpots(page, C, keys, (k) => join(out, `${pre}hero_${k}.png`)),
   );
@@ -751,17 +759,250 @@ async function hero(ctxs, v, pre) {
     shots.map((x) => x.png),
   );
   an.forEach((x, i) => warnIfBlank(label, keys[i], x));
-  const triptych = await contactSheet(tool, join(out, `${pre}hero_triptych.png`), {
+  const strip = await contactSheet(tool, join(out, `${pre}hero_4up.png`), {
     title: `axiom hero · ${shots[0].s.variant} · n=${C.n} frames=${C.frames} seed=${OPT.seed}`,
-    cols: 3,
-    width: sheetWidth(1800),
+    cols: keys.length,
+    width: sheetWidth(2000),
     cells: shots.map((x) => ({ png: x.png, label: `${SPOTS[x.key].label}  ${regimeLine(x.s)}` })),
   });
-  return { triptych, stills: shots.map((x) => x.file), pixels: '860x1864' };
+  return { strip, stills: shots.map((x) => x.file), pixels: '860x1864' };
+}
+
+// ---- film: a scripted bead journey, one screenshot per frame, encoded with ffmpeg ---------------
+const FILM = {
+  viewport: { width: 430, height: 932 },
+  deviceScaleFactor: 1.5,
+  isMobile: true,
+  hasTouch: true,
+};
+const FILM_MAX_MB = 5.5;
+const smooth = (x) => ((t) => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, x)));
+const lerp2 = (p, q, s) => [p[0] + (q[0] - p[0]) * s, p[1] + (q[1] - p[1]) * s];
+const polar = (r, deg) => [
+  r * Math.cos((deg * Math.PI) / 180),
+  r * Math.sin((deg * Math.PI) / 180),
+];
+const at = (k) => [SPOTS[k].u, SPOTS[k].v];
+const RIM = Math.hypot(0.64, 0.64);
+// The star, a loop is born, out to the rim, round to the labyrinth, then Lorenz; each leg eases
+// from where the last one ended. Fractions are of the whole clip.
+const JOURNEY = [
+  [0.05, () => at('centre')],
+  [0.22, (s) => lerp2(at('centre'), at('loop'), s)],
+  [0.3, (s) => lerp2(at('loop'), at('rossler'), s)],
+  [0.55, (s) => polar(0.9 + (RIM - 0.9) * s, 180 + 135 * s)], // (-0.9, 0) -> (0.64, -0.64) via the bottom
+  [0.6, () => at('labyrinth')],
+  [0.72, (s) => polar(RIM, 315 + 90 * s)], // -> (0.64, 0.64) via (0.9, 0)
+  [0.76, () => at('lorenz')],
+  [0.86, () => at('lorenz')], // the dive happens here, see diveAt
+  [1, (s) => lerp2(at('lorenz'), at('centre'), s)],
+];
+const POSTER_AT = 0.74;
+function journeyAt(p) {
+  let start = 0;
+  for (const [end, pos] of JOURNEY) {
+    if (p <= end) return pos(smooth((p - start) / (end - start)));
+    start = end;
+  }
+  return at('centre');
+}
+const diveAt = (p) => 0.7 * smooth((p - 0.76) / 0.1) * (1 - smooth((p - 0.86) / 0.14));
+const yawAt = (p) => -0.25 + 1.5 * p; // a slow orbit, about 86 degrees over the clip
+
+// First ffmpeg (env, the one Playwright bundles, then PATH) that can write webm (VP8) or mp4 (x264).
+const CODECS = [
+  {
+    name: 'libvpx',
+    ext: 'webm',
+    mime: 'video/webm',
+    // constrained quality: -crf sets the ceiling, -b:v the size budget; cpu-used 3 keeps up with rendering
+    args: (kbps) =>
+      `-c:v libvpx -b:v ${kbps}k -crf 10 -deadline good -cpu-used 3 -threads 2`.split(' '),
+  },
+  {
+    name: 'libx264',
+    ext: 'mp4',
+    mime: 'video/mp4',
+    args: (kbps) =>
+      `-c:v libx264 -crf 20 -maxrate ${kbps}k -bufsize ${2 * kbps}k -movflags +faststart`.split(
+        ' ',
+      ),
+  },
+];
+function findEncoder() {
+  const root =
+    process.env.PLAYWRIGHT_BROWSERS_PATH ?? resolve(dirname(chromium.executablePath()), '../..');
+  const bundled = existsSync(root)
+    ? readdirSync(root)
+        .filter((d) => d.startsWith('ffmpeg-'))
+        .flatMap((d) =>
+          readdirSync(join(root, d))
+            .filter((f) => /^ffmpeg-(linux|mac|win)/.test(f))
+            .map((f) => join(root, d, f)),
+        )
+    : [];
+  for (const bin of [process.env.FFMPEG, ...bundled, 'ffmpeg'].filter(Boolean)) {
+    const listed = spawnSync(bin, ['-hide_banner', '-encoders']).stdout?.toString() ?? '';
+    const codec = CODECS.find((c) => new RegExp(`\\s${c.name}\\s`).test(listed));
+    if (codec) return { bin, ...codec };
+  }
+  throw new Error('no ffmpeg with libvpx or libx264 found (set $FFMPEG to one)');
+}
+
+// JPEG frames (the one still format Playwright's ffmpeg can decode) go in through stdin as they
+// are rendered, so nothing piles up in memory.
+function startEncoder(enc, file, fps, kbps) {
+  const filters = 'crop=trunc(iw/2)*2:trunc(ih/2)*2'; // yuv420p needs even dimensions
+  const input = `-y -loglevel error -f image2pipe -framerate ${fps} -c:v mjpeg -i pipe:0`.split(
+    ' ',
+  );
+  const output = `-vf ${filters} -pix_fmt yuv420p -r ${fps}`.split(' ');
+  const proc = spawn(enc.bin, [...input, ...output, ...enc.args(kbps), file], {
+    stdio: ['pipe', 'ignore', 'pipe'],
+  });
+  let err = '';
+  proc.stderr.on('data', (d) => (err += d));
+  proc.stdin.on('error', () => {}); // a dead ffmpeg is reported through `done`
+  const done = new Promise((ok, no) => {
+    proc.on('error', no);
+    proc.on('close', (code) =>
+      code === 0 ? ok() : no(new Error(`ffmpeg exited ${code}: ${err.trim().slice(-400)}`)),
+    );
+  });
+  done.catch(() => {});
+  return {
+    write: (png) =>
+      Promise.race([
+        new Promise((ok) => (proc.stdin.write(png) ? ok() : proc.stdin.once('drain', ok))),
+        done,
+      ]),
+    finish: () => (proc.stdin.end(), done),
+    kill: () => proc.kill('SIGKILL'),
+  };
+}
+
+// Load the clip in Chromium: it must decode, report a sane duration, and not be black mid-way.
+function inspectVideo(tool, file, mime) {
+  return evalT(
+    tool,
+    async ([b64, type]) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const video = document.createElement('video');
+      video.muted = true;
+      video.src = URL.createObjectURL(new Blob([bytes], { type }));
+      await new Promise((ok, no) => {
+        video.onloadeddata = ok;
+        video.onerror = () =>
+          no(new Error(`video does not decode: ${video.error?.message ?? video.error?.code}`));
+      });
+      video.currentTime = video.duration / 2;
+      await new Promise((ok) => (video.onseeked = ok));
+      const g = new OffscreenCanvas(64, 64).getContext('2d', { willReadFrequently: true });
+      g.drawImage(video, 0, 0, 64, 64);
+      const px = g.getImageData(0, 0, 64, 64).data;
+      let sum = 0;
+      for (let i = 0; i < px.length; i += 4) sum += (px[i] + px[i + 1] + px[i + 2]) / 3;
+      return {
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight,
+        midLuma: sum / (px.length / 4) / 255,
+      };
+    },
+    [readFileSync(file).toString('base64'), mime],
+    'inspect video',
+  );
+}
+
+async function film(ctxs, v, pre) {
+  const { browser, base, tool, out } = ctxs;
+  const C = cfg('film');
+  const fps = Number(a.fps ?? 30);
+  const seconds = Number(a.duration ?? 12);
+  const total = Math.max(2, Math.round(seconds * fps));
+  const sim = Math.max(1, Math.round(60 / fps)); // 60 Hz simulation regardless of output rate
+  const label = `film${v ? `[${v}]` : ''}`;
+  const enc = findEncoder();
+  const file = join(out, `${pre}film.${enc.ext}`);
+  const kbps = Math.floor((FILM_MAX_MB * 8 * 1024) / (total / fps));
+  log(`  ${total} frames @ ${fps} fps, ${sim} sim step(s) each, ${enc.name}, <= ${kbps} kbps`);
+  const t0 = Date.now();
+  const { poster, id } = await withPage(
+    browser,
+    base,
+    label,
+    v,
+    { ...C, device: FILM },
+    async (page) => {
+      await hook(page, 'setBead', 0, 0);
+      await hook(page, 'step', C.frames); // settle on the star before the first frame
+      const encoder = startEncoder(enc, file, fps, kbps);
+      let poster;
+      try {
+        for (let i = 0; i < total; i++) {
+          const p = i / (total - 1);
+          const [u, w] = journeyAt(p);
+          await evalT(
+            page,
+            async ([u, w, yaw, dive, n]) => {
+              window.__axiom.setBead(u, w);
+              window.__axiom.setCamera({ yaw, dive });
+              await window.__axiom.step(n, 1 / 60);
+            },
+            [u, w, yawAt(p), diveAt(p), sim],
+            'film frame',
+          );
+          if (i === Math.round(POSTER_AT * (total - 1))) poster = await page.screenshot();
+          await encoder.write(await page.screenshot({ type: 'jpeg', quality: 92 }));
+          if ((i + 1) % 30 === 0 || i + 1 === total) {
+            const el = (Date.now() - t0) / 1000;
+            log(
+              `  frame ${i + 1}/${total}  ${el.toFixed(0)} s  eta ${((el / (i + 1)) * (total - i - 1)).toFixed(0)} s`,
+            );
+          }
+        }
+        await encoder.finish();
+      } catch (e) {
+        encoder.kill();
+        throw e;
+      }
+      return { poster, id: (await hook(page, 'stats')).variant };
+    },
+  );
+  const rendered = (Date.now() - t0) / 1000;
+  if (v) check(label, 'engine loaded the requested variant', id === v, id);
+  const posterFile = join(out, `${pre}film_poster.png`);
+  writeFileSync(posterFile, poster);
+  const info = await inspectVideo(tool, file, enc.mime);
+  const mb = statSync(file).size / 1048576;
+  check(
+    label,
+    'clip decodes with the expected duration',
+    Math.abs(info.duration - total / fps) < 0.5,
+    `${info.duration.toFixed(2)} s, ${info.width}x${info.height}`,
+  );
+  check(
+    label,
+    'clip is not black',
+    info.midLuma > 0.005,
+    `mid-frame luma ${info.midLuma.toFixed(3)}`,
+  );
+  if (mb > 6) warn(label, `clip is ${mb.toFixed(1)} MB (> 6 MB)`);
+  log(`  ${label} rendered in ${rendered.toFixed(0)} s -> ${file} (${mb.toFixed(2)} MB)`);
+  return {
+    file,
+    poster: posterFile,
+    renderSeconds: +rendered.toFixed(1),
+    frames: total,
+    fps,
+    sizeMB: +mb.toFixed(2),
+    video: info,
+    encoder: `${enc.name} (${enc.bin})`,
+  };
 }
 
 // ---- main ------------------------------------------------------------------------------------
-const MODES = { grid, sweep, sensors, gate, variants, hero };
+const MODES = { grid, sweep, sensors, gate, variants, hero, film };
 const ONCE = new Set(['variants']); // modes that consume every --v id in a single run
 let server, browser;
 const cleanup = async () => {

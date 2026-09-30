@@ -27,6 +27,10 @@ export class Framing {
   readonly center: [number, number, number] = [0, 0, 0];
   /** multiplier on the default camera distance */
   scale = 1;
+  /** Slowish speed of the settled cloud (world units / s), eased. */
+  refSpeed = 0.3;
+  /** 0 for a point (keep its star), 1 for an extended attractor (equalise dwell). */
+  equalise = 0;
   private radius = 0;
   private logScale = 0;
 
@@ -37,6 +41,8 @@ export class Framing {
       this.center[i] += (measured.center[i] * CENTER_FOLLOW - this.center[i]) * kc;
 
     this.radius += (measured.radius - this.radius) * (1 - Math.exp(-dt / TAU_SIZE));
+    this.refSpeed += (measured.speed - this.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
+    this.equalise = smoothstep(POINT_RADIUS, POINT_FULL, this.radius);
     const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, this.radius / RADIUS_AT_UNITY));
     const target = Math.log(fit) * smoothstep(POINT_RADIUS, POINT_FULL, this.radius);
     const step = MAX_LOG_RATE * dt;

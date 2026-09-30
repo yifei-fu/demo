@@ -11,7 +11,7 @@ export const variant: Variant = {
   shadeWgsl,
   gradeWgsl,
   render: {
-    exposure: 6.2,
+    exposure: 7.0,
     trail: 0.88,
     dof: 1,
     bloom: 7.5,

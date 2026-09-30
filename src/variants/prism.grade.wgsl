@@ -24,23 +24,27 @@ fn prism_film(thickness: f32) -> vec3f {
   return max(vec3f(1.0) - PRISM_XYZ_TO_RGB * xyz / PRISM_WHITE, vec3f(0.0));
 }
 
-// The glint: a stone catches light in rays. Eight thin rays, four long and four short, radiate from
-// the middle of the frame, where the resting point sits, and they draw only over light that is already
-// bright, so nothing appears where nothing burns. `q` is in pixels from the centre, `h` the frame height.
-fn prism_rays(q: vec2f, h: f32) -> vec2f {
+// The glint: light entering glass splits by wavelength. A hairline cross, no longer than a thumb-nail,
+// leaves the middle of the frame, where the resting point sits, white at the core and then blue,
+// green and red one after another as the ray disperses, inside a thin spectral ring. It draws only
+// over light that is already bright, so nothing appears where nothing burns. `q` is in pixels from
+// the centre and `h` the frame height.
+fn prism_glint(q: vec2f, h: f32) -> vec3f {
   let a = abs(q);
-  let along1 = max(a.x, a.y);
-  let perp1 = min(a.x, a.y);
-  let r = vec2f(q.x + q.y, q.x - q.y) * 0.70710678;
-  let b = abs(r);
-  let along2 = max(b.x, b.y);
-  let perp2 = min(b.x, b.y);
-  let s1 = 0.55 + 0.006 * along1;
-  let s2 = 0.55 + 0.006 * along2;
-  let ray1 = exp(-0.5 * perp1 * perp1 / (s1 * s1)) / (1.0 + pow(along1 / (0.07 * h), 2.0));
-  let ray2 = exp(-0.5 * perp2 * perp2 / (s2 * s2)) / (1.0 + pow(along2 / (0.04 * h), 2.0));
-  // energy, and how far along the nearer ray this pixel lies (for the colour of the ray)
-  return vec2f(ray1 + 0.55 * ray2, select(along2, along1, ray1 >= ray2));
+  let along = max(a.x, a.y);
+  let perp = min(a.x, a.y);
+  let len = 0.036 * h;
+  let hair = exp(-0.5 * perp * perp / 0.25);
+  let lobe = vec3f(0.45, 0.68, 0.92) * len;   // where blue, green and red peak along the ray
+  let spread = 0.13 * len;
+  let split = exp(-0.5 * pow((vec3f(along) - lobe) / spread, vec3f(2.0)));
+  let base = exp(-along / (0.16 * len));
+  let ray = hair * (vec3f(base) + 0.8 * split * exp(-along / (0.9 * len)));
+  // the ring: each colour turns at a slightly different radius
+  let rho = length(q);
+  let radii = vec3f(0.0085, 0.0095, 0.0106) * h;
+  let ring = 0.45 * exp(-0.5 * pow((vec3f(rho) - radii) / 0.6, vec3f(2.0)));
+  return ray + ring;
 }
 
 fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
@@ -63,11 +67,9 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   c = mix(c, veil * (y1 + 0.5 * hi), hi * 0.85);
   // the glint
   let px = max(vec2f(abs(dpdx(uv.x)), abs(dpdy(uv.y))), vec2f(1e-6));
-  let rays = prism_rays((uv - vec2f(0.5)) / px, 1.0 / px.y);
-  let lit = smoothstep(0.12, 1.6, y1);
-  let fire = mix(vec3f(1.0), prism_film(270.0 + 3.2 * rays.y), 0.75);
-  // 6.67 s is exactly 150 turns of the 1000 s clock: a slow twinkle, well under 1 Hz
-  let twinkle = 1.0 + 0.14 * sin(6.2831853 * time / 6.666667);
-  c += fire * rays.x * lit * 4.2 * twinkle * sqrt(y1);
+  let lit = smoothstep(0.1, 1.6, y1);
+  // 6.67 s is exactly 150 turns of the 1000 s clock: a slow breath, well under 1 Hz
+  let breath = 1.0 + 0.06 * sin(6.2831853 * time / 6.666667);
+  c += prism_glint((uv - vec2f(0.5)) / px, 1.0 / px.y) * lit * 4.6 * breath * sqrt(y1);
   return max(c, vec3f(0.0));
 }

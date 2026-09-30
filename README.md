@@ -113,11 +113,18 @@ npm run shots -- --mode grid --n 32768 --frames 60   # 3×3 bead positions × 2 
 npm run shots -- --mode sweep                        # continuity: Δ between neighbouring frames
 npm run shots -- --mode sensors                      # deviceorientation, devicemotion, touch
 npm run shots -- --mode gate                         # start gate and no-WebGPU fallback
-npm run shots -- --mode variants --v origin,flame    # matrix: variants × 7 spots on the disk
-npm run shots -- --mode hero --v origin              # 430×932 @2x stills and a triptych (slow)
-# options: --desktop  --v <ids>  --n  --seed  --frames  --out  --port
+npm run shots -- --mode variants --v origin,flame    # matrix: variants × 6 spots on the disk
+npm run shots -- --mode hero --v origin              # 4 clean 430×932 @2x stills and a 4-up (slow)
+npm run shots -- --mode film --v origin              # silent clip of a scripted journey (very slow)
+# options: --desktop  --v <ids>  --n  --seed  --frames  --out  --port  --duration  --fps
 #          --query "k=v&k=v" (extra URL params, e.g. mapn=32)  --url <already-running server>
 ```
+
+`film` walks the bead from the centre out to the loop, round the rim to the labyrinth, into a dive
+and back, while the camera orbits slowly: 12 s at 30 fps by default (`--duration`, `--fps`), one
+screenshot per frame at 430×932 @1.5x, encoded to `<id>_film.webm` (VP8, under about 6 MB) plus a
+poster PNG. It uses the ffmpeg that ships with Playwright, or the one in `$FFMPEG` / `PATH`. On a
+software GPU it takes many minutes per clip, so try `--duration 3 --n 32768` first.
 
 URL flags for manual testing: `?seed=` `?v=` `?n=` `?debug` `?skipintro` `?capture` (plus `?mapn=`
 and `?mapsteps=` for the parameter map's resolution and speed).

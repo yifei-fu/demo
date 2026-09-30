@@ -9,7 +9,7 @@ import type { Variant } from './variants/types';
 
 const WORKGROUP = 64;
 const MAX_GROUPS_X = 65535;
-const FRAME_FLOATS = 48; // 12 vec4
+const FRAME_FLOATS = 52; // 13 vec4
 const FLAG_INIT = 1;
 const FLAG_SPLAT = 2;
 const SHAKE_DECAY = 3.2; // 1/s
@@ -20,6 +20,8 @@ const MAX_SUBSTEP_DT = 0.03; // world time; keeps RK2 accurate on a fast law at 
 const MAX_SUBSTEPS = 4;
 /** About this many particles feed the extent measurement each frame. */
 const EXTENT_SAMPLES = 2048;
+/** The least a slow particle may weigh next to a typical one (dwell equalisation). */
+const DWELL_FLOOR = 0.15;
 const TAN_HALF = 0.31;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
@@ -64,6 +66,9 @@ export class Particles {
   private readonly f32 = new Float32Array(this.frameData);
   private readonly u32 = new Uint32Array(this.frameData);
   private bindGroup: GPUBindGroup | null = null;
+  /** Set each frame by the engine from the framing measurement. */
+  refSpeed = 0.3;
+  equalise = 0;
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;
@@ -81,7 +86,7 @@ export class Particles {
     this.particles = device.createBuffer({
       label: 'particles',
       size: count * PARTICLE_BYTES,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.extent = new ExtentProbe(device);
     this.lawBuf = createUniform(device, LAW_LEN * 4 + 16, 'law');
@@ -181,11 +186,12 @@ export class Particles {
     );
     const probe = this.extent.probe;
     vec4(f, 40, probe[0], probe[1], probe[2], 0);
+    vec4(f, 44, this.refSpeed, this.equalise, DWELL_FLOOR, 0);
     const u = this.u32;
-    u[44] = p.frame >>> 0;
-    u[45] = this.count;
-    u[46] = this.seed;
-    u[47] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
+    u[48] = p.frame >>> 0;
+    u[49] = this.count;
+    u[50] = this.seed;
+    u[51] = extraFlags | (p.splat ? FLAG_SPLAT : 0);
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);

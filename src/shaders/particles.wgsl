@@ -14,6 +14,7 @@ struct Frame {
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
   probe: vec4f,   // xyz: centre the extent histogram is measured from
+  tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -44,6 +45,12 @@ const TAIL_DT: f32 = 0.04;           // world time between tail samples (a 0.55 
 const POS_FIXED: f32 = 16384.0;
 const HIST_BINS: u32 = 32u;
 const HIST_RANGE: f32 = 2.0;
+// ... and a histogram of their speed, in thirds of an octave from 2^-8 upward.
+const SPEED_BINS: u32 = 48u;
+const SPEED_BASE: f32 = -8.0;
+const SPEED_PER_OCTAVE: f32 = 3.0;
+const BOKEH_SAMPLE_PX: f32 = 4.5;    // a particle blurred wider than this deposits several samples
+const BOKEH_MAX_SAMPLES: u32 = 8u;
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
 
 fn pcg(v: u32) -> u32 {
@@ -82,8 +89,15 @@ fn stir_velocity(p: vec3f) -> vec3f {
   return strength * g * (2.2 * swirl + 0.7 * clamp(drag, vec3f(-3.0), vec3f(3.0)));
 }
 
-// Project a world point and add it to the accumulation buffer at a random spot inside its circle
-// of confusion (stochastic depth of field). `col` is linear colour, `wgt` its particle weight.
+// Round `x` to an integer without bias, so a faint weight spread over many samples survives.
+fn stochastic(x: vec3f, h: u32) -> vec3<u32> {
+  return vec3<u32>(x + vec3f(u01(h), u01(pcg(h)), u01(pcg(pcg(h)))));
+}
+
+// Project a world point and add it to the accumulation buffer at random spots inside its circle of
+// confusion (stochastic depth of field). `col` is linear colour, `wgt` its particle weight. A
+// particle blurred over many pixels deposits several samples, each with a share of the weight, so
+// soft bokeh volumes fill in smoothly instead of speckling.
 fn splat(pos: vec3f, col: vec3f, wgt: f32, hj: u32) {
   let d = pos - F.eye.xyz;
   let cz = dot(d, F.fwd.xyz);
@@ -93,17 +107,26 @@ fn splat(pos: vec3f, col: vec3f, wgt: f32, hj: u32) {
   let ndc = vec2f(cx / cz * F.right.w, cy / cz * F.up.w);
   if (abs(ndc.x) > 2.0 || abs(ndc.y) > 2.0) { return; }
   let res = F.screen.xy;
-  var px = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * res;
+  let centre = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * res;
   let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + MIN_COC_PER_850PX * max(0.75, res.y / 850.0);
-  let ang = TAU * u01(hj);
-  px += coc * sqrt(u01(pcg(hj))) * vec2f(cos(ang), sin(ang));
-  if (px.x < 0.0 || px.y < 0.0 || px.x >= res.x || px.y >= res.y) { return; }
-  let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
-  let c = max(col, vec3f(0.0)) * (wgt * FIXED);
-  atomicAdd(&accum[base], u32(c.r));
-  atomicAdd(&accum[base + 1u], u32(c.g));
-  atomicAdd(&accum[base + 2u], u32(c.b));
-  atomicAdd(&accum[base + 3u], u32(wgt * FIXED));
+  let m = clamp(u32(ceil(coc / BOKEH_SAMPLE_PX)), 1u, BOKEH_MAX_SAMPLES);
+  let each = max(col, vec3f(0.0)) * (wgt * FIXED / f32(m));
+  let each_w = wgt * FIXED / f32(m);
+  var h = hj;
+  for (var k = 0u; k < m; k++) {
+    let ang = TAU * u01(h);
+    let px = centre + coc * sqrt(u01(pcg(h))) * vec2f(cos(ang), sin(ang));
+    let hr = pcg(h ^ 0x68e31da4u);
+    if (px.x >= 0.0 && px.y >= 0.0 && px.x < res.x && px.y < res.y) {
+      let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
+      let c = stochastic(each, hr);
+      atomicAdd(&accum[base], c.x);
+      atomicAdd(&accum[base + 1u], c.y);
+      atomicAdd(&accum[base + 2u], c.z);
+      atomicAdd(&accum[base + 3u], stochastic(vec3f(each_w), hr ^ 0x1b873593u).x);
+    }
+    h = pcg(hr);
+  }
 }
 
 @compute @workgroup_size(64)
@@ -167,6 +190,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     atomicAdd(&extent[3], bitcast<u32>(f.z));
     let bin = min(u32(length(p - F.probe.xyz) * (f32(HIST_BINS) / HIST_RANGE)), HIST_BINS - 1u);
     atomicAdd(&extent[4u + bin], 1u);
+    let sbin = u32(clamp((log2(max(speed, 1e-4)) - SPEED_BASE) * SPEED_PER_OCTAVE, 0.0, f32(SPEED_BINS - 1u)));
+    atomicAdd(&extent[4u + HIST_BINS + sbin], 1u);
   }
 
   if ((F.ids.w & 2u) == 0u) { return; }
@@ -181,7 +206,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   let calm = mix(REFERENCE_SPEED, speed, settled);
   let col = shade(calm, phase, depth, F.misc.x);
   let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION && settled < 1.0;
-  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), 1.0, settled);
+  // Dwell equalisation: an extended attractor piles particles up where the flow is slow (near its
+  // saddles and foci), which would burn a star-like hotspot into the picture. Weighting a
+  // particle by its speed relative to the typical one turns dwell time into arc length. A true
+  // fixed point is one cloud of equally slow particles, so it is left alone (tone.y = 0).
+  let dwell = mix(1.0, clamp(speed / max(F.tone.x, 1e-3), F.tone.z, 1.0), F.tone.y);
+  let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), dwell, settled);
   splat(q_draw, col, wgt, hj);
 
   if (tracer) {

@@ -28,9 +28,13 @@
  *            Colours are averaged per pixel weighted by particle count, so keep hue coherent
  *            between neighbouring speeds, otherwise dense regions average to grey.
  *
- * Newly born particles are dimmed and given a calm reference speed by the engine while they fall
- * toward the attractor, so `shade` only ever describes settled light.
- * Only these arguments are in scope. Pure functions of them keep the frame deterministic.
+ * Newly born particles are dimmed by the engine while they fall toward the attractor, and are
+ * shaded with `speed = REFERENCE_SPEED` (0.45 world units per second, a stable constant), a real
+ * `phase`, `depth` and `seed`. So `shade` only ever describes settled light, and a variant can
+ * rely on newcomers all wearing the colour it returns for 0.45 (choose that colour deliberately:
+ * it is the hue of the faint inward streams). The engine also weights particles by dwell
+ * (slow ones count less on an extended attractor), which `shade` cannot see or affect.
+ * Only the four arguments are in scope. Pure functions of them keep the frame deterministic.
  *
  * ## `gradeWgsl`: the finish, run once per pixel in the composite pass
  *
@@ -58,7 +62,9 @@
  *     brighter than paper white, so a direct look opts into HDR highlights by exceeding 1 and is
  *     otherwise unaffected by the headroom. The output is clamped to [0, headroom].
  *
- * Only these arguments are in scope; helper functions must have variant-specific names.
+ * Besides its arguments, `grade` may call `axiom_headroom() -> f32`: the display headroom relative
+ * to SDR white (1.0 on SDR, about 1.7 on an HDR display), e.g. to let a highlight exceed 1 only
+ * where the display can show it. Helper functions must have variant-specific names.
  *
  * ## Light variants
  *
@@ -86,6 +92,14 @@ export interface VariantRender {
   grain: number;
   /** Chromatic aberration at the frame corners as a fraction of the frame; ~0.004 is a whisper. */
   aberration: number;
+  /**
+   * Local contrast, default 0 (off). The engine adds `clarity * (hdr - blur(hdr))` to the light
+   * before `grade()`, where `blur` is a wide (about a sixteenth of the screen) blur of the same
+   * light. 0.3 - 0.6 keeps filaments legible inside dense, volume-filling chaos; 1 is strong.
+   */
+  clarity?: number;
+  /** Linear multiplier on the bloom term only, default `[1, 1, 1]`. Colours the halo, not the light. */
+  bloomTint?: [number, number, number];
   /** `'agx'` (default look: background + AgX) or `'direct'` (grade() is the final colour). */
   finish: VariantFinish;
   /** The void or paper, as sRGB-encoded 0..1 (like a CSS colour). Themes the page and the gate. */

@@ -1,9 +1,10 @@
-// abyss: the finish is water. Four quiet things, none of them meant to be noticed one by one:
+// abyss: the finish is water, and it is the final colour (no AgX). A filmic curve would turn every
+// glow pearly; here each channel saturates on its own, so cyan stays cyan into the highlights and
+// only the hottest cores go pale. Quiet things, none meant to be noticed one by one:
 //  - the sea breathes: luminance swells and ebbs on a ten second period, a hair later toward the
 //    edges, so it reads as a slow swell of water and not a pulse;
-//  - a web of caustic light drifts overhead, felt in the haze and in the way faint filaments glint;
-//  - the blacks are lifted toward deep teal, brighter high in the frame where the surface is;
-//  - shadows lean cool and chroma is pushed out ahead of AgX, which desaturates by design.
+//  - a web of caustic light drifts overhead and threads the haze, felt more than seen;
+//  - the water is nearly black; a teal haze gathers only toward the top, where the light comes from.
 // Every phase is an integer number of cycles per 1000 s, so nothing jumps when `time` wraps.
 const ABYSS_TAU: f32 = 6.2831853;
 
@@ -30,6 +31,17 @@ fn abyss_caustic(p: vec2f, ph: f32) -> f32 {
   return pow(clamp(acc / wsum, 0.0, 1.0), 2.0);
 }
 
+// Scene light to display-linear, tone-mapped on the brightest channel and not per channel: the ratio
+// between channels is kept, so cyan stays cyan into the highlights (a per-channel curve, AgX included,
+// bleaches every glow toward white). The curve is logarithmic, so a dense core keeps a gradient over
+// many stops; only the last stretch toward full brightness gives up its colour, into a pale aqua.
+fn abyss_tone(c: vec3f) -> vec3f {
+  let m = max(max(c.r, max(c.g, c.b)), 1e-6);
+  let t = pow(log2(1.0 + 24.0 * m) / log2(961.0), 1.5);
+  let pale = vec3f(0.86, 1.0, 1.0) * t;
+  return mix(c * (t / m), pale, 0.85 * smoothstep(0.55, 1.0, t));
+}
+
 fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // uv is not aspect-corrected; its screen-space derivatives give the frame's aspect ratio
   let asp = abs(dpdy(uv.y)) / max(abs(dpdx(uv.x)), 1e-6);
@@ -47,20 +59,21 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   var c = hdr * breath * (1.0 + 0.24 * (web - 0.2));
   // the brightest light swells a little more than the water around it: the nucleus breathes
   c *= 1.0 + 0.10 * swell * smoothstep(1.0, 8.0, max(c.r, max(c.g, c.b)));
+
+  // shadows lean cool and chroma is pushed a little; blue light pours into green as it brightens,
+  // so a dense core reads as aqua and never as lilac (teal is left alone)
   let y = abyss_luma(c);
-
-  // shadows lean toward teal-blue; chroma is pushed out ahead of the tonemap
-  let deep = 1.0 - smoothstep(0.0, 0.6, y);
-  c *= mix(vec3f(1.0), vec3f(0.76, 0.97, 1.12), 0.55 * deep);
-  c = max(mix(vec3f(abyss_luma(c)), c, 1.32), vec3f(0.0));
-  // whatever burns hot burns cyan: blue light pours into green as it brightens, so a dense core reads
-  // as aqua-white, the colour of a real flash in the water, and never as lilac; teal is left alone
+  c *= mix(vec3f(1.0), vec3f(0.78, 0.97, 1.10), 0.5 * (1.0 - smoothstep(0.0, 0.5, y)));
+  c = max(mix(vec3f(abyss_luma(c)), c, 1.22), vec3f(0.0));
   let m = max(c.r, max(c.g, c.b));
-  let hot = smoothstep(0.6, 5.0, m);
-  c = mix(c, vec3f(c.r, max(c.g, 0.85 * c.b), 0.9 * c.b), hot);
+  c = mix(c, vec3f(c.r, max(c.g, 0.85 * c.b), 0.9 * c.b), smoothstep(0.6, 5.0, m));
 
-  // depth haze: lifted teal blacks, keener toward the top of the frame, threaded with the caustic web
-  let above = (0.55 + 0.45 * (1.0 - uv.y)) * (1.0 - 0.45 * smoothstep(0.15, 0.75, length(d)));
-  let haze = vec3f(0.00026, 0.00135, 0.00180) * above * (0.75 + 1.2 * web) * (0.94 + 0.5 * (breath - 1.0));
-  return c + haze;
+  // the water: nearly black; the top of the frame holds the last of the light from far above,
+  // in faint slanted shafts that the caustic web moves through
+  let top = pow(1.0 - uv.y, 2.0);
+  let shaft = 0.5 + 0.5 * sin(pa.x * 8.0 + pa.y * 3.0 + 1.6 * sin(pa.y * 2.3 + ph * 11.0) + ph * 7.0);
+  let haze = vec3f(0.00045, 0.0024, 0.0034) * top * (0.55 + 1.1 * web + 0.6 * shaft * shaft) * (0.94 + 0.5 * (breath - 1.0));
+  let floor_ = vec3f(0.00028, 0.00085, 0.00145) * (1.0 - 0.5 * smoothstep(0.2, 0.8, length(d)));
+  let lit = abyss_tone(c);
+  return lit + haze + floor_;
 }
