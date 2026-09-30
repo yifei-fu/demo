@@ -15,7 +15,7 @@ struct Frame {
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride (w unused)
   probe: vec4f,   // xyz: centre the extent histogram is measured from, w: the attractor's radius
   tone: vec4f,    // reference speed, dwell equalisation 0..1, its floor, depth cue strength
-  live: vec4f,    // eased Kaplan-Yorke dimension, still-point flag (axiom_dky / axiom_still), hollow-orbit flag, fast speed
+  live: vec4f,    // eased Kaplan-Yorke dimension, still-point flag (see axiom_dky / axiom_still), closed-orbit flag
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -58,12 +58,14 @@ const SPEED_BINS: u32 = 48u;
 const SPEED_BASE: f32 = -8.0;
 const SPEED_PER_OCTAVE: f32 = 3.0;
 // On a closed orbit (or torus) the inside is empty. A cloud that was gathered on the old law's
-// fixed point takes many seconds to leave a newly repelling focus, and being most of the cloud it
-// is not "slow" by any yardstick of its own; it would burn a bright spot in the middle of the
-// loop. Whatever old, slow matter lingers deep inside is recycled like an escapee instead.
-const RECYCLE_PER_SECOND: f32 = 3.0;
+// fixed point takes many seconds to leave a newly repelling focus; being most of the cloud it
+// would burn a bright spot into the middle of the loop however it is weighted (and, carried into
+// a nearly conservative law, stretch into thick bright ribbons). Matter that lingers there, slow
+// and deep inside, is recycled like an escapee instead.
+const RECYCLE_PER_SECOND: f32 = 6.0;
 const INTERIOR: f32 = 0.3;           // of the attractor's radius, from its centre
-const LINGERING: f32 = 0.4;          // of the fast speed
+const MIN_RADIUS: f32 = 0.25;        // (a measured radius below this is the stranded cloud itself)
+const LINGERING: f32 = 0.8;          // of the reference speed
 const DWELL_POWER: f32 = 2.4;        // slow particles count for less than in proportion to their speed
 const DEPTH_CUE: f32 = 2.0;          // e-folds of dimming across the attractor at full strength
 const STREAK_LEN: f32 = 0.14;        // world units; streak length for volume-filling attractors
@@ -93,13 +95,13 @@ fn is_finite3(p: vec3f) -> bool {
   return all(b != m);
 }
 
-// True for old, slow matter lingering deep inside a closed orbit (see RECYCLE_PER_SECOND).
+// True for slow matter lingering deep inside a closed orbit (see RECYCLE_PER_SECOND).
 fn stranded(p: vec3f, age: f32, h: u32) -> bool {
   let hollow = F.live.z;
-  if (hollow <= 0.0 || age < SETTLED_END) { return false; }
+  if (hollow <= 0.0 || age < SETTLED_START) { return false; }
   if (u01(h) >= RECYCLE_PER_SECOND * hollow * F.screen.z) { return false; }
-  if (length(p - F.probe.xyz) > INTERIOR * F.probe.w) { return false; }
-  return length(f_world_of(law, p)) < LINGERING * F.live.w;
+  if (length(p - F.probe.xyz) > INTERIOR * max(F.probe.w, MIN_RADIUS)) { return false; }
+  return length(f_world_of(law, p)) < LINGERING * F.tone.x;
 }
 
 // Vortex around the touch ray plus a push along the finger's motion.
@@ -219,18 +221,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   }
   parts[i] = vec4f(p, born);
 
-  // extent: see HIST_BINS
+  // extent: see HIST_BINS. Speeds count from the moment a particle has fallen onto the attractor,
+  // so the arms of a loop being born are in the reference; positions wait until it has settled,
+  // so the halo of streams still falling in does not inflate the size.
   let stride = u32(F.misc.z);
-  if (!init && age > SETTLED_END && i % stride == 0u) {
-    let f = vec3i(round(p * POS_FIXED));
-    atomicAdd(&extent[0], 1u);
-    atomicAdd(&extent[1], bitcast<u32>(f.x));
-    atomicAdd(&extent[2], bitcast<u32>(f.y));
-    atomicAdd(&extent[3], bitcast<u32>(f.z));
-    let bin = min(u32(length(p - F.probe.xyz) * (f32(HIST_BINS) / HIST_RANGE)), HIST_BINS - 1u);
-    atomicAdd(&extent[4u + bin], 1u);
+  if (!init && age > SETTLED_START && i % stride == 0u) {
     let sbin = u32(clamp((log2(max(speed, 1e-4)) - SPEED_BASE) * SPEED_PER_OCTAVE, 0.0, f32(SPEED_BINS - 1u)));
     atomicAdd(&extent[4u + HIST_BINS + sbin], 1u);
+    if (age > SETTLED_END) {
+      let f = vec3i(round(p * POS_FIXED));
+      atomicAdd(&extent[0], 1u);
+      atomicAdd(&extent[1], bitcast<u32>(f.x));
+      atomicAdd(&extent[2], bitcast<u32>(f.y));
+      atomicAdd(&extent[3], bitcast<u32>(f.z));
+      let bin = min(u32(length(p - F.probe.xyz) * (f32(HIST_BINS) / HIST_RANGE)), HIST_BINS - 1u);
+      atomicAdd(&extent[4u + bin], 1u);
+    }
   }
 
   if ((F.ids.w & 2u) == 0u) { return; }

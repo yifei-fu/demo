@@ -46,8 +46,6 @@ export interface SceneTone {
   still: number;
   /** 1 for a closed orbit or torus, whose inside is empty: what lingers there is stranded. */
   hollow: number;
-  /** Speed of the quick part of the flow (world units / s), the yardstick for "lingering". */
-  fast: number;
 }
 
 export class Framing {
@@ -60,7 +58,6 @@ export class Framing {
     dky: 0,
     still: 1,
     hollow: 0,
-    fast: 1,
   };
   /** multiplier on the default camera distance */
   scale = 1;
@@ -85,8 +82,6 @@ export class Framing {
     // (floored, so a cloud still parked on the old star cannot make "slow" the norm)
     const ref = Math.max(REF_SPEED_MIN, measured.speed);
     tone.refSpeed += (ref - tone.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
-    tone.fast +=
-      (Math.max(REF_SPEED_MIN, measured.fast) - tone.fast) * (1 - Math.exp(-dt / TAU_SIZE));
     // A law that is not a stable fixed point makes slow particles a hotspot straight away, even if
     // most of the cloud has not left the old star yet; only a true fixed point keeps its star.
     // Volume-filling fog has no hotspot, and weighting a periodic speed field only prints it.
