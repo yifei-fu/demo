@@ -29,20 +29,10 @@ use dsp::{lowpass_coeff, smoothing, white, Ramp};
 use std::f64::consts::TAU;
 
 pub const MAX_FRAMES: usize = 256;
-
-fn tune(name: &str, default: f32) -> f32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
 pub(crate) const PROBES: usize = 6;
 /// Harmonics of the root the probes may be tuned to (chosen per seed).
 const HARMONICS: [f32; 8] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0];
 
-/// Probe state noise floor (world units per sample). Far below hearing, but it
-/// seeds a Hopf bifurcation and keeps every filter out of denormal range.
-const NOISE_FLOOR: f32 = 2.0e-6;
 /// Extra per-sample state kick at full stir (at audio-rate probes).
 const STIR_KICK: f32 = 6.0e-4;
 /// Probe level above which the slow follower turns the gain down.
@@ -51,13 +41,20 @@ pub(crate) const LEVEL_REF: f32 = 0.22;
 /// `SWELL_RATE` dB per second toward `SWELL_HEADROOM` times the level and
 /// follows it back down after `SWELL_RELEASE`. A Hopf bifurcation grows in
 /// milliseconds at audio-rate probes; this turns that pop into a swell.
-const SWELL_RATE_DB: f32 = 24.0;
+const SWELL_RATE_DB: f32 = 15.0;
 const SWELL_RELEASE: f32 = 0.25;
 const SWELL_HEADROOM: f32 = 2.0;
 /// Level (in x units) the ceiling never falls below.
-const SWELL_FLOOR: f32 = 0.012;
+const SWELL_FLOOR: f32 = 0.025;
 /// The peak detector's hold time.
 const SWELL_HOLD: f32 = 0.03;
+/// Running-mean time (world units) of the plane Ink cuts its rhythm at.
+const SECTION_MEAN: f32 = 10.0;
+/// World speed below which a probe counts as resting (for `rest_boost`).
+const REST_SPEED: f32 = 0.06;
+/// The limiter starts pulling the gain down when the output peaks above this
+/// (the soft clip behind it still tops out at 0.9).
+const LIMIT: f32 = 1.0;
 const CONTROL_EVERY: usize = 16;
 /// How fast a preset fades in and out.
 const CROSSFADE: f32 = 0.12;
@@ -118,9 +115,32 @@ impl Preset {
                 rt60: 9.5,
                 damp: 0.72,
                 wet: 0.55,
-                drone: [1.0, 0.7, 0.4, 0.25, 0.0, 0.0, 0.0],
+                drone: [0.7, 0.5, 0.3, 0.2, 0.0, 0.0, 0.0],
                 wind: 0.3,
             },
+        }
+    }
+
+    /// Diffusion of the probe noise, in world units² per world unit: what
+    /// seeds a Hopf bifurcation. The kick per sample is √(D·h), so a slow
+    /// probe is shaken exactly as hard per world unit as a fast one. Audio-rate
+    /// probes need only enough to stay out of denormal range; Ink's slow
+    /// probes are seeded a little harder so a cycle can start within a second.
+    fn diffusion(self) -> f32 {
+        match self {
+            Preset::Ink => 4.0e-7,
+            _ => 4.0e-10,
+        }
+    }
+
+    /// How much faster (×1 + this) a probe near rest runs, in world time.
+    /// Ink's probes crawl at a few Hz, and a Hopf grows over tens of world
+    /// units: without this a cycle would need many seconds to emerge from the
+    /// noise. Nothing is heard while a probe rests, so its clock may race.
+    fn rest_boost(self) -> f32 {
+        match self {
+            Preset::Ink => 30.0,
+            _ => 0.0,
         }
     }
 
@@ -186,16 +206,11 @@ pub(crate) struct Ctx {
     /// Low-pass coefficient of the classic voice (follows D, dive, chaos).
     pub lp_a: f32,
     pub rms_k: f32,
-    boost: f32,
-    rest: f32,
-    density: f32,
-    pub zmean: f32,
-    pub hyst: f32,
-    pub gap: f32,
-    /// Per-sample growth factor of the swell ceiling, its release coefficient
-    /// and the peak detector's decay.
-    swell_up: f32,
-    swell_down: f32,
+    /// Per-sample growth factor of the swell ceiling and its release
+    /// coefficient (see `SWELL_RATE_DB`).
+    pub swell_up: f32,
+    pub swell_down: f32,
+    /// The peak detector's per-sample decay.
     swell_hold: f32,
 }
 
@@ -211,6 +226,9 @@ pub struct Synth {
     dive: Ramp,
     dky: f32,
     lam1: f32,
+    /// Rest boost and noise diffusion, gliding to the preset's values.
+    boost: f32,
+    diffusion: f32,
     preset: Preset,
     levels: [Ramp; 4],
     probes: [Probe; PROBES],
@@ -271,6 +289,8 @@ impl Synth {
             dive: Ramp::new(0.0),
             dky: 0.0,
             lam1: 0.0,
+            boost: 0.0,
+            diffusion: Preset::Classic.diffusion(),
             preset: Preset::Classic,
             levels: [
                 Ramp::new(1.0),
@@ -285,12 +305,6 @@ impl Synth {
                 stir: 0.0,
                 lp_a: 0.1,
                 rms_k: smoothing(1.0 / sr, 0.4),
-                boost: tune("INK_BOOST", 6.0),
-                rest: tune("INK_REST", 0.08),
-                density: tune("INK_DENSITY", 4e-6),
-                zmean: tune("INK_ZMEAN", 10.0),
-                hyst: tune("INK_HYST", 0.02),
-                gap: tune("INK_GAP", 0.08),
                 swell_up: (SWELL_RATE_DB * std::f32::consts::LN_10 / 20.0 / sr).exp(),
                 swell_down: smoothing(1.0 / sr, SWELL_RELEASE),
                 swell_hold: 1.0 - smoothing(1.0 / sr, SWELL_HOLD),
@@ -359,11 +373,6 @@ impl Synth {
         self.wind.whoosh();
     }
 
-    #[doc(hidden)]
-    pub fn debug_probes(&self) -> Vec<(V3, f32, f32)> {
-        self.probes.iter().map(|p| (p.x, p.speed, p.hz)).collect()
-    }
-
     pub fn preset(&self) -> Preset {
         self.preset
     }
@@ -410,6 +419,8 @@ impl Synth {
         self.fdn.glide(k(0.6));
         self.drone.control(dt, self.sr);
         self.wind.control(dt, self.sr, self.dive.cur);
+        self.boost += (self.preset.rest_boost() - self.boost) * k(0.25);
+        self.diffusion += (self.preset.diffusion() - self.diffusion) * k(0.25);
         for p in self.probes.iter_mut() {
             p.hz += (self.preset.probe_hz(self.root_hz, p.mul) - p.hz) * k(0.25);
         }
@@ -422,9 +433,9 @@ impl Synth {
         let sr = self.sr as f64;
         let mut views = [ProbeView::default(); PROBES];
         for (p, view) in self.probes.iter_mut().zip(views.iter_mut()) {
-            let slow = if p.hz < 20.0 { 1.0 } else { 0.0 };
-            let dil = 1.0 + slow * self.ctx.boost * (-(p.speed / self.ctx.rest).powi(2)).exp();
-            let h = (TAU * p.hz as f64 * dil as f64 / (omega * sr)).clamp(1e-6, 0.12);
+            // Near rest (speed ≪ REST_SPEED) the clock runs 1 + boost times faster.
+            let rest = 1.0 + self.boost * (-(p.speed * (1.0 / REST_SPEED)).powi(2)).exp();
+            let h = (TAU * p.hz as f64 * rest as f64 / (omega * sr)).clamp(1e-6, 0.12);
             let mut x = rk4(&self.law, p.x, h);
             if !x.iter().all(|v| v.is_finite() && v.abs() < 4.0) {
                 // A trajectory that escaped the basin: start it over.
@@ -436,16 +447,12 @@ impl Synth {
             // The state kick scales with the drive rate: it is per sample, and
             // a slow probe would otherwise be shaken far harder per world unit.
             let kick = stir * STIR_KICK * (p.hz / (55.0 * p.mul)).min(1.0).sqrt();
-            let floor = if slow > 0.0 {
-                (self.ctx.density * h as f32).sqrt()
-            } else {
-                NOISE_FLOOR
-            };
+            let floor = (self.diffusion * h as f32).sqrt();
             for c in x.iter_mut() {
                 *c += ((kick + floor) * white(&mut self.rng)) as f64;
             }
             p.x = x;
-            p.zm += (x[2] as f32 - p.zm) * (h as f32 / self.ctx.zmean).min(1.0);
+            p.zm += (x[2] as f32 - p.zm) * (h as f32 * (1.0 / SECTION_MEAN)).min(1.0);
 
             let s = x[0] as f32;
             let dc = s - p.dc_x + 0.9975 * p.dc_y;
@@ -527,8 +534,8 @@ impl Synth {
             1.0 - (-1.0 / (0.25 * self.sr)).exp()
         };
         self.limiter += a * (peak - self.limiter);
-        let g = if self.limiter > 0.7 {
-            0.7 / self.limiter
+        let g = if self.limiter > LIMIT {
+            LIMIT / self.limiter
         } else {
             1.0
         };

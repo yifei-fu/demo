@@ -26,9 +26,18 @@ const SCALE: [f32; 10] = [
     10.0 / 3.0,
 ];
 const VOICES: usize = 16;
-/// A probe must dip this far below the plane before it can strike again, so
-/// jitter around z = 0 cannot machine-gun a note.
+/// A probe must sink this far below its own section before it can strike
+/// again, so jitter around the plane cannot machine-gun a note.
 const HYSTERESIS: f32 = 0.02;
+/// ... and at least this long (s) must pass between two of its strikes.
+const MIN_GAP: f32 = 0.08;
+/// Pluck loudness at full vigour (RMS of the initial burst).
+const STRIKE: f32 = 0.4;
+/// The burst is low-passed noise, `SOFT_REST + SOFT_HARD · vigour` being the
+/// one-pole coefficient: a soft touch is felt, a hard one only a little
+/// brighter (centroid ≈ 1.2 kHz, not the 3 kHz of a raw noise burst).
+const SOFT_REST: f32 = 0.04;
+const SOFT_HARD: f32 = 0.07;
 const LOWEST_HZ: f32 = 45.0;
 
 /// One Karplus–Strong string: a delay line with a two-point average and a
@@ -131,8 +140,10 @@ pub struct Ink {
     pool: Vec<Pluck>,
     armed: [bool; PROBES],
     since: [f32; PROBES],
-    /// Pitch of each probe's last pluck (Hz) and its hum.
-    pitch: [f32; PROBES],
+    /// Per-probe ceiling on pluck vigour that climbs at the swell rate.
+    ceil: [f32; PROBES],
+    /// Scale degree of each probe's last pluck; the hum sings it.
+    degree: [usize; PROBES],
     hum_phase: [f32; PROBES],
     hum_amp: [f32; PROBES],
     plucks: u64,
@@ -146,7 +157,8 @@ impl Ink {
             pool: (0..VOICES).map(|_| Pluck::new(capacity)).collect(),
             armed: [false; PROBES],
             since: [1.0; PROBES],
-            pitch: [220.0; PROBES],
+            ceil: [0.05; PROBES],
+            degree: [0; PROBES],
             hum_phase: [0.0; PROBES],
             hum_amp: [0.0; PROBES],
             plucks: 0,
@@ -157,16 +169,19 @@ impl Ink {
         self.plucks
     }
 
-    fn strike(&mut self, k: usize, p: &ProbeView, ctx: &Ctx, rng: &mut Rng) {
+    /// Pitch of probe `k` on a scale degree: two octaves over the root, the
+    /// two lowest probes an octave further down.
+    fn note(&self, k: usize, degree: usize, ctx: &Ctx) -> f32 {
+        let octave = if k < 2 { 0.5 } else { 1.0 };
+        (ctx.root_hz * 4.0 * octave * SCALE[degree])
+            .max(LOWEST_HZ)
+            .min(0.4 * self.sample_rate)
+    }
+
+    fn strike(&mut self, k: usize, p: &ProbeView, vigour: f32, ctx: &Ctx, rng: &mut Rng) {
         let degree =
             (((p.x[0] as f32 + 1.0) * 0.5 * SCALE.len() as f32) as usize).min(SCALE.len() - 1);
-        // The two lowest probes sing an octave down.
-        let octave = if k < 2 { 0.5 } else { 1.0 };
-        let freq = (ctx.root_hz * 4.0 * octave * SCALE[degree])
-            .max(LOWEST_HZ)
-            .min(0.4 * self.sample_rate);
-        let v = (p.speed / 0.35).min(1.0);
-        let vigour = v * (2.0 - v);
+        let freq = self.note(k, degree, ctx);
         let slot = self
             .pool
             .iter()
@@ -179,30 +194,42 @@ impl Ink {
         self.pool[slot].strike(
             freq,
             self.sample_rate,
-            0.3 * vigour,
+            STRIKE * vigour,
             p.pan,
-            0.3 + 0.4 * vigour,
+            SOFT_REST + SOFT_HARD * vigour,
             rng,
         );
-        self.pitch[k] = freq;
+        self.degree[k] = degree;
         self.plucks += 1;
     }
 
     pub fn tick(&mut self, probes: &[ProbeView; PROBES], ctx: &Ctx, rng: &mut Rng) -> (f32, f32) {
         let (mut l, mut r) = (0.0, 0.0);
         for (k, p) in probes.iter().enumerate() {
+            // Vigour: how hard the probe moves. It may not rise faster than the
+            // swell ceiling, so an ostinato fades in instead of starting cold.
+            let v = (p.speed / 0.35).min(1.0);
+            let want = v * (2.0 - v);
+            let goal = 2.0 * want + 0.05;
+            self.ceil[k] = if goal > self.ceil[k] {
+                goal.min(self.ceil[k] * ctx.swell_up)
+            } else {
+                self.ceil[k] + ctx.swell_down * (goal - self.ceil[k])
+            };
+            let vigour = want.min(self.ceil[k]);
             self.since[k] += 1.0 / self.sample_rate;
-            if p.dz < -ctx.hyst {
+            if p.dz < -HYSTERESIS {
                 self.armed[k] = true;
-            } else if self.armed[k] && p.dz >= 0.0 && self.since[k] >= ctx.gap {
+            } else if self.armed[k] && p.dz >= 0.0 && self.since[k] >= MIN_GAP {
                 self.armed[k] = false;
                 self.since[k] = 0.0;
-                self.strike(k, p, ctx, rng);
+                self.strike(k, p, vigour, ctx, rng);
             }
             // The quiet continuous voice: a hum that lives only while the probe moves.
             let target = 0.012 * (p.speed / 0.4).clamp(0.0, 1.0);
             self.hum_amp[k] += 0.0008 * (target - self.hum_amp[k]);
-            self.hum_phase[k] = (self.hum_phase[k] + TAU * self.pitch[k] / self.sample_rate) % TAU;
+            let pitch = self.note(k, self.degree[k], ctx);
+            self.hum_phase[k] = (self.hum_phase[k] + TAU * pitch / self.sample_rate) % TAU;
             let hum = self.hum_phase[k].sin() * self.hum_amp[k];
             let (gl, gr) = pan_gains(p.pan);
             l += hum * gl;

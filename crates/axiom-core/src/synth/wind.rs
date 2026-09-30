@@ -4,6 +4,13 @@ use super::dsp::{smoothing, white, Svf};
 use crate::rng::Rng;
 use std::f64::consts::TAU;
 
+/// A shake: the whoosh rises over 50 ms (soft, no click) and its level falls
+/// as e^(-2t/1.3 s), so it stands ~7 dB proud of the music for half a second
+/// and has settled after ~1.5 s.
+const WHOOSH_GAIN: f32 = 2.2;
+const WHOOSH_DECAY: f32 = 1.3;
+const WHOOSH_ATTACK: f32 = 0.05;
+
 #[derive(Default)]
 pub struct Wind {
     lfo_phase: f64,
@@ -11,7 +18,9 @@ pub struct Wind {
     band: [Svf; 2],
     whoosh_band: [Svf; 2],
     centre: f32,
+    /// The shake's level: `whoosh` decays from 1, `swell` follows it softly.
     whoosh: f32,
+    swell: f32,
 }
 
 impl Wind {
@@ -27,22 +36,23 @@ impl Wind {
         let target_hz = 380.0 + 900.0 * sweep + 500.0 * dive;
         let f = (std::f32::consts::TAU * target_hz / sample_rate).min(1.0);
         self.centre += (f - self.centre) * smoothing(dt, 0.5);
-        self.whoosh *= (-dt / 0.55).exp();
+        self.whoosh *= (-dt / WHOOSH_DECAY).exp();
         if self.whoosh < 1e-4 {
             self.whoosh = 0.0;
         }
+        self.swell += (self.whoosh - self.swell) * smoothing(dt, WHOOSH_ATTACK);
     }
 
     /// Stereo noise. `gain` is the preset's wind scale.
     pub fn tick(&mut self, stir: f32, dive: f32, gain: f32, rng: &mut Rng) -> [f32; 2] {
         let level = gain * (0.4 * stir * stir.sqrt() + 0.15 * dive);
-        let sweep = (self.centre * (0.35 + 2.2 * self.whoosh)).min(1.0);
+        let sweep = (self.centre * (0.35 + 2.2 * self.swell)).min(1.0);
         let mut out = [0.0f32; 2];
         for (c, o) in out.iter_mut().enumerate() {
             self.lp[c] += 0.12 * (white(rng) - self.lp[c]);
             let band = self.band[c].process(self.lp[c] * 2.5, self.centre, 0.9).bp;
             let whoosh = self.whoosh_band[c].process(white(rng), sweep, 0.6).bp;
-            *o = band * level + whoosh * 0.6 * self.whoosh * self.whoosh;
+            *o = band * level + whoosh * WHOOSH_GAIN * self.swell * self.swell;
         }
         out
     }

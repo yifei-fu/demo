@@ -159,6 +159,7 @@ fn schedule(seed: u32, events: bool) -> Vec<Tick> {
 
 /// Render one preset along the schedule; returns (left, right).
 fn render(preset: u32, root: f32, seed: u32, ticks: &[Tick]) -> (Vec<f32>, Vec<f32>) {
+    let mut counts: Vec<u64> = Vec::new();
     let n = total();
     let mut synth = Synth::new(SR as f32, seed);
     synth.set(4, preset as f32);
@@ -190,6 +191,18 @@ fn render(preset: u32, root: f32, seed: u32, ticks: &[Tick]) -> (Vec<f32>, Vec<f
             r[s + i] = out[2 * i + 1];
         }
         s += QUANTUM;
+        if s % 4800 == 0 {
+            counts.push(synth.pluck_count());
+        }
+    }
+    if preset == 1 && std::env::var("PLUCKS").is_ok() && ticks.iter().all(|t| !t.shake) {
+        let d: Vec<String> = counts
+            .windows(2)
+            .enumerate()
+            .filter(|(i, _)| (46..80).contains(i))
+            .map(|(_, w)| (w[1] - w[0]).to_string())
+            .collect();
+        println!("plucks per 100 ms, 4.6..8 s: {}", d.join(" "));
     }
     (l, r)
 }
@@ -390,7 +403,12 @@ fn main() {
     }
     let control_ticks = schedule(seed, false);
     let event_ticks = schedule(seed, true);
+    let only = std::env::var("ONLY").ok();
+    let mut summary: Vec<(&str, Vec<f64>, Vec<f64>)> = Vec::new();
     for (name, preset, root) in PRESETS {
+        if only.as_deref().is_some_and(|o| !name.starts_with(o)) {
+            continue;
+        }
         let (cl, cr) = render(preset, root, seed, &control_ticks);
         let (el, er) = render(preset, root, seed, &event_ticks);
         let control = Audio { l: cl, r: cr };
@@ -419,11 +437,12 @@ fn main() {
         if let Ok(range) = std::env::var("SERIES") {
             let mut it = range.split(',').filter_map(|v| v.parse::<f64>().ok());
             let (a, b) = (it.next().unwrap_or(0.0), it.next().unwrap_or(DURATION));
-            let line: Vec<String> = (0..st.len())
-                .filter(|&i| i as f64 * 0.1 >= a && (i as f64 * 0.1) < b)
-                .map(|i| format!("{:.0}", st[i]))
+            let fine = short_term(&control, 0.05);
+            let line: Vec<String> = (0..fine.len())
+                .filter(|&i| i as f64 * 0.05 >= a && (i as f64 * 0.05) < b)
+                .map(|i| format!("{:.1}", fine[i]))
                 .collect();
-            println!("series {a}..{b} s (100 ms dB): {}", line.join(" "));
+            println!("series {a}..{b} s (50 ms dB): {}", line.join(" "));
         }
         let (j100, t100) = max_jump(&st, 0.1);
         let (j250, t250) = max_jump(&st25, 0.25);
@@ -454,7 +473,7 @@ fn main() {
         );
         println!("stir mid band 0.5-4 kHz: {:.1} -> {:.1} dB", stir_mid.0, stir_mid.1);
         // shake: events minus control, 100 ms windows from the shake
-        let delta: Vec<f64> = (0..30)
+        let delta: Vec<f64> = (0..40)
             .map(|i| {
                 let t = SHAKE_AT + 0.1 * i as f64;
                 rms_peak(&events, t, t + 0.1).1 - rms_peak(&control, t, t + 0.1).1
@@ -465,11 +484,39 @@ fn main() {
             .iter()
             .rposition(|d| *d > 1.5)
             .map_or(0.0, |i| (i + 1) as f64 * 0.1);
+        let win = rms_peak(&events, SHAKE_AT, SHAKE_AT + 0.6).1
+            - rms_peak(&control, SHAKE_AT, SHAKE_AT + 0.6).1;
         println!(
-            "shake: peak +{peak:.1} dB over the no-event render, above +1.5 dB for {settle:.1} s"
+            "shake: 0.6 s window +{win:.1} dB, 100 ms peak +{peak:.1} dB, above +1.5 dB for {settle:.1} s"
         );
+        let line: Vec<String> = delta.iter().map(|d| format!("{d:.0}")).collect();
+        println!("shake delta per 100 ms: {}", line.join(" "));
         if let Some(dir) = &out_dir {
             write_wav(&format!("{dir}/{name}.wav"), &events).expect("write wav");
         }
+        summary.push((
+            name,
+            rows.iter().map(|r| r.db).collect(),
+            rows.iter().map(|r| (1.0 - r.lf) * 100.0).collect(),
+        ));
     }
+    println!("\n== loudness relative to default (dB) and share of energy above 200 Hz (%)");
+    let reference = summary.iter().find(|s| s.0 == "default").map(|s| s.1.clone());
+    for (name, db, hi) in &summary {
+        let rel: Vec<String> = (1..9)
+            .map(|i| match &reference {
+                Some(r) => format!("{:+5.1}", db[i] - r[i]),
+                None => format!("{:5.1}", db[i]),
+            })
+            .collect();
+        let mean = (1..9).map(|i| 10f64.powf(db[i] / 10.0)).sum::<f64>() / 8.0;
+        let share: Vec<String> = (1..9).map(|i| format!("{:3.0}", hi[i])).collect();
+        println!(
+            "{name:<20} rel {} | mean {:.1} dB | >200 Hz % {}",
+            rel.join(" "),
+            10.0 * mean.log10(),
+            share.join(" ")
+        );
+    }
+    println!("(columns: out hopf to-rim rim-arc labyrinth rim-lorenz lorenz return)");
 }

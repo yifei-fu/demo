@@ -151,7 +151,7 @@ export class Engine {
     this.core.spectrumStep(this.law, SPECTRUM_STEP);
     this.spectrum = this.core.spectrumRead();
     this.particles.setLaw(this.law);
-    this.framing.update(this.particles.extent.value, this.spectrum.dky, dt);
+    this.framing.update(this.particles.extent.value, this.spectrum.dky, this.spectrum.regime, dt);
     this.particles.refSpeed = this.framing.refSpeed;
     this.particles.equalise = this.framing.equalise;
     this.particles.radius = this.framing.size;

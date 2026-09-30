@@ -14,6 +14,9 @@ const POINT_RADIUS = 0.05;
 const POINT_FULL = 0.22;
 const TAU_SIZE = 2;
 const TAU_CENTER = 3;
+const TAU_EQUALISE = 0.8;
+/** Slowest reference speed (world units / s) dwell equalisation will use. */
+const REF_SPEED_MIN = 0.15;
 /** Largest change of ln(distance) per second. */
 const MAX_LOG_RATE = 0.22;
 const CENTER_FOLLOW = 0.95;
@@ -44,7 +47,7 @@ export class Framing {
     return this.radius;
   }
 
-  update(measured: Extent | null, dky: number, dt: number): void {
+  update(measured: Extent | null, dky: number, regime: number, dt: number): void {
     this.volume +=
       (smoothstep(VOLUME_D0, VOLUME_D1, dky) - this.volume) * (1 - Math.exp(-dt / TAU_SIZE));
     if (!measured) return;
@@ -53,8 +56,13 @@ export class Framing {
       this.center[i] += (measured.center[i] * CENTER_FOLLOW - this.center[i]) * kc;
 
     this.radius += (measured.radius - this.radius) * (1 - Math.exp(-dt / TAU_SIZE));
-    this.refSpeed += (measured.speed - this.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
-    this.equalise = smoothstep(POINT_RADIUS, POINT_FULL, this.radius);
+    // (floored, so a cloud still parked on the old star cannot make "slow" the norm)
+    const ref = Math.max(REF_SPEED_MIN, measured.speed);
+    this.refSpeed += (ref - this.refSpeed) * (1 - Math.exp(-dt / TAU_SIZE));
+    // A law that is not a stable fixed point makes slow particles a hotspot straight away, even if
+    // most of the cloud has not left the old star yet; only a true fixed point keeps its star.
+    const gate = regime === 0 ? smoothstep(POINT_RADIUS, POINT_FULL, this.radius) : 1;
+    this.equalise += (gate - this.equalise) * (1 - Math.exp(-dt / TAU_EQUALISE));
     const fit = Math.min(SCALE_MAX, Math.max(SCALE_MIN, this.radius / RADIUS_AT_UNITY));
     const target = Math.log(fit) * smoothstep(POINT_RADIUS, POINT_FULL, this.radius);
     const step = MAX_LOG_RATE * dt;

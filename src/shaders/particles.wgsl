@@ -10,7 +10,7 @@ struct Frame {
   ray: vec4f,     // xyz stir ray direction, w = stir radius in tan units
   screen: vec4f,  // width, height, dt, time
   lens: vec4f,    // focus distance, aperture (px), near plane, max CoC (px)
-  stir: vec4f,    // touch ndc x, y, strength, unused
+  stir: vec4f,    // touch ndc x, y, strength, dive amount
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, extent-sampling stride
   probe: vec4f,   // xyz: centre the extent histogram is measured from, w: the attractor's radius
@@ -49,8 +49,10 @@ const HIST_RANGE: f32 = 2.0;
 const SPEED_BINS: u32 = 48u;
 const SPEED_BASE: f32 = -8.0;
 const SPEED_PER_OCTAVE: f32 = 3.0;
+const DWELL_POWER: f32 = 1.6;        // slow particles count for less than in proportion to their speed
 const DEPTH_CUE: f32 = 2.0;          // e-folds of dimming across the attractor at full strength
-const STREAK_LEN: f32 = 0.05;        // world units; streak length for volume-filling attractors
+const STREAK_LEN: f32 = 0.14;        // world units; streak length for volume-filling attractors
+const DIVE_SOFTEN: f32 = 2.2;        // extra softening of every point at full dive
 const BOKEH_SAMPLE_PX: f32 = 4.5;    // a particle blurred wider than this deposits several samples
 const BOKEH_MAX_SAMPLES: u32 = 8u;
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
@@ -116,7 +118,9 @@ fn splat(pos: vec3f, col: vec3f, wgt0: f32, hj: u32) {
   if (abs(ndc.x) > 2.0 || abs(ndc.y) > 2.0) { return; }
   let res = F.screen.xy;
   let centre = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * res;
-  let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + MIN_COC_PER_850PX * max(0.75, res.y / 850.0);
+  // in a dive even the in-focus particles are sparse, so every point is softened a little more
+  let soft = MIN_COC_PER_850PX * max(0.75, res.y / 850.0) * (1.0 + DIVE_SOFTEN * F.stir.w);
+  let coc = min(F.lens.y * abs(cz - F.lens.x) / cz, F.lens.w) + soft;
   let m = clamp(u32(ceil(coc / BOKEH_SAMPLE_PX)), 1u, BOKEH_MAX_SAMPLES);
   let each = max(col, vec3f(0.0)) * (wgt * FIXED / f32(m));
   let each_w = wgt * FIXED / f32(m);
@@ -223,7 +227,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   // saddles and foci), which would burn a star-like hotspot into the picture. Weighting a
   // particle by its speed relative to the typical one turns dwell time into arc length. A true
   // fixed point is one cloud of equally slow particles, so it is left alone (tone.y = 0).
-  let dwell = mix(1.0, clamp(speed / max(F.tone.x, 1e-3), F.tone.z, 1.0), F.tone.y);
+  let slow = clamp(speed / max(F.tone.x, 1e-3), 0.0, 1.0);
+  let dwell = mix(1.0, max(pow(slow, DWELL_POWER), F.tone.z), F.tone.y);
   let wgt = mix(select(DUST_WEIGHT, TRACER_WEIGHT, tracer), dwell, settled);
   splat(q_draw, col, wgt, hj);
 

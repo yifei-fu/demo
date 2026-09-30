@@ -7,6 +7,17 @@ use super::{Ctx, ProbeView, LEVEL_REF, PROBES};
 use crate::rng::Rng;
 use std::f32::consts::TAU;
 
+/// The shimmer's partials, as multiples of the root: a just-intonation major
+/// chord (12 : 15 : 18 : 20 : 24 : 30) five octaves up, where a phone speaker
+/// can speak. Each one belongs to a probe and wakes with it.
+const SHIMMER: [f32; PROBES] = [12.0, 15.0, 18.0, 20.0, 24.0, 30.0];
+/// Partials above this many Hz are folded down by octaves.
+const SHIMMER_MAX: f32 = 2_200.0;
+/// Weight of the probes' deep body, of the lights at rest and of the extra
+/// light a moving probe wakes.
+const BODY: f32 = 0.46;
+const GLOW_REST: f32 = 0.03;
+const GLOW_MOVING: f32 = 0.39;
 const BUBBLES: usize = 8;
 /// Bubbles per second at full stir.
 const BUBBLE_RATE: f32 = 16.0;
@@ -24,6 +35,9 @@ pub struct Abyss {
     ms: [f32; PROBES],
     swell: [f32; PROBES],
     swell_rate: [f32; PROBES],
+    shimmer: [f32; PROBES],
+    twinkle: [f32; PROBES],
+    twinkle_rate: [f32; PROBES],
     bubbles: [Bubble; BUBBLES],
     next: usize,
 }
@@ -36,6 +50,10 @@ impl Abyss {
             swell: std::array::from_fn(|k| k as f32 * 1.1),
             // 0.04–0.11 Hz: a swell every 9–25 seconds.
             swell_rate: std::array::from_fn(|_| 0.04 + 0.07 * rng.f64() as f32),
+            shimmer: [0.0; PROBES],
+            twinkle: std::array::from_fn(|k| k as f32 * 2.3),
+            // 0.13–0.40 Hz: each light comes and goes every few seconds.
+            twinkle_rate: std::array::from_fn(|_| 0.13 + 0.27 * rng.f64() as f32),
             bubbles: [Bubble::default(); BUBBLES],
             next: 0,
         }
@@ -60,7 +78,17 @@ impl Abyss {
             } else {
                 1.0
             };
-            let v = lo * gain * swell * p.swell * p.amp * 0.95;
+            // Bioluminescence: a soft light per probe, brighter as it moves.
+            let mut hz = SHIMMER[k] * ctx.root_hz;
+            while hz > SHIMMER_MAX {
+                hz *= 0.5;
+            }
+            self.shimmer[k] = (self.shimmer[k] + TAU * hz / ctx.sr) % TAU;
+            self.twinkle[k] = (self.twinkle[k] + TAU * self.twinkle_rate[k] / ctx.sr) % TAU;
+            let glow = 0.5 + 0.5 * self.twinkle[k].sin();
+            let awake = (rms / LEVEL_REF).min(1.0) * p.swell;
+            let light = self.shimmer[k].sin() * glow * glow * (GLOW_REST + GLOW_MOVING * awake);
+            let v = (lo * gain * swell * p.swell * BODY + light) * p.amp * 0.95;
             let (gl, gr) = pan_gains(p.pan);
             l += v * gl;
             r += v * gr;

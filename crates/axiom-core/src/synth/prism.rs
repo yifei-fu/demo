@@ -11,7 +11,7 @@ use std::f32::consts::TAU;
 const RATIOS: [f32; PROBES] = [3.0, 2.0, 3.0, 2.0, 3.0, 2.0];
 /// Half of the chorus spread: ±3 cents.
 const DETUNE: f32 = 0.0017;
-const GAIN: f32 = 0.2;
+const GAIN: f32 = 0.15;
 
 #[derive(Default)]
 pub struct Prism {

@@ -21,7 +21,7 @@ const MAX_SUBSTEPS = 4;
 /** About this many particles feed the extent measurement each frame. */
 const EXTENT_SAMPLES = 2048;
 /** The least a slow particle may weigh next to a typical one (dwell equalisation). */
-const DWELL_FLOOR = 0.15;
+const DWELL_FLOOR = 0.03;
 const TAN_HALF = 0.31;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
@@ -177,7 +177,7 @@ export class Particles {
 
     vec4(f, 20, width, height, p.dt, p.time);
     vec4(f, 24, cam.focus, this.aperture * height, NEAR, MAX_COC * height);
-    vec4(f, 28, s.x, s.y, s.active ? s.strength : 0, 0);
+    vec4(f, 28, s.x, s.y, s.active ? s.strength : 0, cam.dive);
     vec4(f, 32, s.vx, s.vy, this.shakeEnergy, this.shakeId);
     const substeps = Math.min(MAX_SUBSTEPS, Math.max(2, Math.ceil(p.dt / MAX_SUBSTEP_DT)));
     vec4(
