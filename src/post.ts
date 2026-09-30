@@ -57,7 +57,7 @@ export class Post {
   private readonly compositePipe: GPURenderPipeline;
   private readonly background: number[];
   /** light curve (gain, slope, slope above knee, knee) then bloom (threshold, spread, cap) */
-  readonly tune = new Float32Array([0.0146, 0.62, 0.4, 400, 0.3, 0.9, 24, 0]);
+  readonly tune = new Float32Array([0.0146, 0.62, 0.5, 400, 2.0, 0.95, 80, 12]);
 
   private accumBuf: GPUBuffer | null = null;
   private hdr: Level[] = [];

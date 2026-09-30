@@ -7,7 +7,7 @@ struct Post {
   c: vec4f,     // pixels per particle, breath
   bg: vec4f,    // background, linear
   t0: vec4f,    // light curve: gain, slope below the knee, slope above it, knee (density)
-  t1: vec4f,    // bloom: threshold, spread, energy cap
+  t1: vec4f,    // bloom: threshold, spread, energy cap; denoise tolerance (sigma^2)
 }
 
 @group(0) @binding(0) var<uniform> P: Post;
@@ -52,21 +52,32 @@ fn density(cellv: vec4f) -> vec3f {
   return (cellv.rgb / cnt) * light((cnt / FIXED) * P.c.x);
 }
 
+// Edge-preserving denoise of the splat. The count in a pixel is Poisson noise around the true
+// density, so a neighbour whose count lies within a few sigma of ours is probably the same surface
+// and is averaged in; one that differs by more is a real edge and is left out.
+fn denoised(ip: vec2i) -> vec4f {
+  let mid = cell(ip);
+  let n0 = mid.w / FIXED;
+  var acc = mid * 4.0;
+  var wsum = 4.0;
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      if (i == 0 && j == 0) { continue; }
+      let c = cell(ip + vec2i(i, j));
+      let dn = (c.w - mid.w) / FIXED;
+      let tent = select(1.0, 2.0, i == 0 || j == 0);
+      let w = tent * exp(-dn * dn / (2.0 * P.t1.w * (n0 + 1.0)));
+      acc += c * w;
+      wsum += w;
+    }
+  }
+  return acc / wsum;
+}
+
 @fragment
 fn fs_resolve(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let ip = vec2i(pos.xy);
-  let mid = cell(ip);
-  var cur = density(mid);
-
-  // adaptive density estimation: where the splat is sparse (a few stray particles), smooth it over
-  // a 3x3 tent so dust reads as soft haze rather than speckle; dense regions stay razor sharp
-  let sparse = 1.0 - smoothstep(6.0, 40.0, mid.w / FIXED);
-  if (sparse > 0.0) {
-    var s = mid * 4.0;
-    s += (cell(ip + vec2i(-1, 0)) + cell(ip + vec2i(1, 0)) + cell(ip + vec2i(0, -1)) + cell(ip + vec2i(0, 1))) * 2.0;
-    s += cell(ip + vec2i(-1, -1)) + cell(ip + vec2i(1, -1)) + cell(ip + vec2i(-1, 1)) + cell(ip + vec2i(1, 1));
-    cur = mix(cur, density(s / 16.0), sparse);
-  }
+  let cur = density(denoised(ip));
 
   let prev = textureLoad(prevTex, ip, 0).rgb;
   // exponential moving average: a longer effective exposure and light-painted trails

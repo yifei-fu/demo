@@ -38,16 +38,24 @@ const START: vec3f = vec3f(0.31, -0.22, 0.27);
 
 struct St { x: vec3f, a: vec3f, b: vec3f, c: vec3f }
 
-// The field and the three Jacobian-vector products (central differences), through a single call
-// site of f_world_of: GPU compilers inline it everywhere it is called, and this is the hot spot.
+// The field and the three Jacobian-vector products (central differences of the field along each
+// tangent vector). One call site of f_world_of: GPU compilers inline it wherever it is called,
+// and it is the hot spot. Evaluation k is at x + sign * h * q with q the tangent vector `w`.
 fn deriv(L: Law, s: St) -> St {
-  var dir = array<vec3f, 7>(vec3f(0.0), s.a, -s.a, s.b, -s.b, s.c, -s.c);
-  var f: array<vec3f, 7>;
-  for (var k = 0u; k < 7u; k++) {
-    f[k] = f_world_of(L, s.x + P.h * dir[k]);
-  }
+  var o = St(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
   let inv = 0.5 / P.h;
-  return St(f[0], (f[1] - f[2]) * inv, (f[3] - f[4]) * inv, (f[5] - f[6]) * inv);
+  for (var k = 0u; k < 7u; k++) {
+    let w = (k + 1u) >> 1u;
+    let sign = select(-1.0, 1.0, (k & 1u) == 1u);
+    var q = vec3f(0.0);
+    if (w == 1u) { q = s.a; } else if (w == 2u) { q = s.b; } else if (w == 3u) { q = s.c; }
+    let f = f_world_of(L, s.x + (sign * P.h) * q);
+    if (w == 0u) { o.x = f; }
+    else if (w == 1u) { o.a += (sign * inv) * f; }
+    else if (w == 2u) { o.b += (sign * inv) * f; }
+    else { o.c += (sign * inv) * f; }
+  }
+  return o;
 }
 
 fn axpy(s: St, k: St, h: f32) -> St {
@@ -55,19 +63,14 @@ fn axpy(s: St, k: St, h: f32) -> St {
 }
 
 fn rk4(L: Law, s: St, h: f32) -> St {
-  var k: array<St, 4>;
   var y = s;
+  var sum = St(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
   for (var i = 0u; i < 4u; i++) {
-    k[i] = deriv(L, y);
-    y = axpy(s, k[i], select(0.5 * h, h, i == 2u));
+    let k = deriv(L, y);
+    sum = axpy(sum, k, select(2.0, 1.0, i == 0u || i == 3u));
+    y = axpy(s, k, select(0.5 * h, h, i == 2u));
   }
-  let w = h / 6.0;
-  return St(
-    s.x + w * (k[0].x + 2.0 * (k[1].x + k[2].x) + k[3].x),
-    s.a + w * (k[0].a + 2.0 * (k[1].a + k[2].a) + k[3].a),
-    s.b + w * (k[0].b + 2.0 * (k[1].b + k[2].b) + k[3].b),
-    s.c + w * (k[0].c + 2.0 * (k[1].c + k[2].c) + k[3].c),
-  );
+  return axpy(s, sum, h / 6.0);
 }
 
 fn hash(v: u32) -> u32 {
@@ -178,7 +181,8 @@ fn lyap(@builtin(global_invocation_id) gid: vec3u) {
   c.q2 = vec4f(s.c, g.z);
   cells[idx] = c;
   // r dimension, g regime, b the whole-number world it rounds to (for contours), a progress
-  textureStore(field_out, gid.xy, vec4f(d, reg, clamp(floor(d + 0.5), 0.0, 3.0), min(1.0, t / P.t_total)));
+  let done = select(min(1.0, t / P.t_total), 1.0, c.info.x > 0.5);
+  textureStore(field_out, gid.xy, vec4f(d, reg, clamp(floor(d + 0.5), 0.0, 3.0), done));
 }
 
 // ---------------------------------------------------------------------------------- lens
@@ -285,7 +289,7 @@ fn fs(in: VOut) -> @location(0) vec4f {
   var col = palette(f.x, acc);
 
   // light gathers at the contours and the plateaus lie deeper, like an engraved chart
-  col *= 0.8 + 0.5 * near;
+  col *= 0.86 + 0.45 * near;
 
   // a faint bevel where the dimension changes fast: light from the upper left
   let slope = vec2f(dpdx(f.x), dpdy(f.x)) * (V.view.y * 0.5) / V.view.x;
@@ -303,7 +307,7 @@ fn fs(in: VOut) -> @location(0) vec4f {
   col = mix(col, ink, line * 0.7 * ready);
 
   // the lens itself: a dimmer rim, a hint of glass, and the r = 1 ring
-  col *= 1.0 - 0.34 * smoothstep(0.6, 1.0, r);
+  col *= 1.0 - 0.22 * smoothstep(0.6, 1.0, r);
   col += vec3f(0.55, 0.62, 0.85) * 0.045 * smoothstep(0.8, 0.0, length(in.p - vec2f(-0.34, 0.42)));
   let ring = exp(-pow((r - (1.0 - 1.5 * px)) / (1.4 * px), 2.0));
   col = mix(col, acc, ring * mix(0.16, 0.24, open));

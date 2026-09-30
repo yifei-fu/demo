@@ -10,10 +10,10 @@ export const origin: Variant = {
   shadeWgsl,
   gradeWgsl,
   render: {
-    exposure: 3.5,
+    exposure: 4,
     trail: 0.85,
     dof: 1,
-    bloom: 1.1,
+    bloom: 4,
     grain: 0.011,
     aberration: 0.0045,
     background: [0.0196, 0.0235, 0.0392],

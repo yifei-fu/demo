@@ -7,6 +7,7 @@ const BEAD_CLOSED = 4;
 const BEAD_OPEN = 10;
 const TAP_SLOP = 12;
 const TAP_MS = 500;
+const PINCH_MS = 300;
 const MAX_BACKING = 2048;
 /** Legend swatches: the palette's own colours at D = 0, 1, 2, 3. */
 const LEGEND: readonly (readonly [string, string])[] = [
@@ -135,7 +136,10 @@ export class MapView {
       [{ transform: `translate(${dx}px, ${dy}px) scale(${scale})` }, { transform: 'none' }],
       timing,
     );
-    this.anims.push(move, this.bead.animate([{ scale: then / (now * scale) }, { scale: 1 }], timing));
+    this.anims.push(
+      move,
+      this.bead.animate([{ scale: then / (now * scale) }, { scale: 1 }], timing),
+    );
     this.animating = true;
     move.onfinish = () => {
       this.animating = false;
@@ -174,7 +178,19 @@ export class MapView {
     const down = new Set<number>();
     let tap: { id: number; x: number; y: number; t: number } | null = null;
     const lift = (e: PointerEvent): void => void down.delete(e.pointerId);
-    root.addEventListener('pointerdown', (e) => down.add(e.pointerId), { ...on, capture: true });
+    let grab: { u: number; v: number; t: number } | null = null;
+    root.addEventListener(
+      'pointerdown',
+      (e) => {
+        down.add(e.pointerId);
+        // a second finger means the first was the start of a pinch: put the bead back
+        if (down.size === 2 && this.dragging && grab && e.timeStamp - grab.t < PINCH_MS) {
+          this.events.pick(grab.u, grab.v);
+        }
+        if (down.size > 1) this.dragging = false;
+      },
+      { ...on, capture: true },
+    );
     root.addEventListener('pointerup', lift, on);
     root.addEventListener('pointercancel', lift, on);
 
@@ -185,12 +201,17 @@ export class MapView {
         e.preventDefault();
         this.dragging = down.size === 1;
         if (!this.dragging) return;
+        grab = { u: this.bu, v: this.bv, t: e.timeStamp };
         disk.setPointerCapture(e.pointerId);
         this.pick(e);
       },
       on,
     );
-    disk.addEventListener('pointermove', (e) => this.dragging && down.size === 1 && this.pick(e), on);
+    disk.addEventListener(
+      'pointermove',
+      (e) => this.dragging && down.size === 1 && this.pick(e),
+      on,
+    );
     const release = (): void => void (this.dragging = false);
     disk.addEventListener('pointerup', release, on);
     disk.addEventListener('pointercancel', release, on);
@@ -198,7 +219,8 @@ export class MapView {
     scrim.addEventListener(
       'pointerdown',
       (e) =>
-        (tap = down.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp } : null),
+        (tap =
+          down.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp } : null),
       on,
     );
     scrim.addEventListener(
