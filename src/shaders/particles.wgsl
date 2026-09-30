@@ -13,6 +13,7 @@ struct Frame {
   stir: vec4f,    // touch ndc x, y, strength, unused
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
   misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, unused...
+  tune: vec4f,    // dust weight, tracer weight, age of full brightness start / end (s)
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -27,7 +28,8 @@ const SPAWN_RADIUS: f32 = 1.2;
 const ESCAPE_R2: f32 = 2.56;             // respawn beyond |x| = 1.6
 const TRICKLE_PER_SECOND: f32 = 0.12;   // 0.2 % per frame at 60 fps
 const TRACER_FRACTION: f32 = 0.004;  // a few particles burn much brighter and draw visible streams
-const TRACER_WEIGHT: f32 = 22.0;
+const OLD_TRACER_WEIGHT: f32 = 6.0;  // settled tracers keep a modest sparkle
+const REFERENCE_SPEED: f32 = 0.45;   // the hue newcomers wear, whatever their speed
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
 
 fn pcg(v: u32) -> u32 {
@@ -74,9 +76,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   let seed = F.ids.z;
   let dt = F.screen.z;
 
-  var q = parts[i];
+  let q = parts[i];
   var p = q.xyz;
-  var phase = q.w;
+  var born = q.w;  // simulation time at which this particle last (re)spawned
 
   // respawn: initial fill, escaped or NaN, and a steady trickle so streams keep flowing in
   let init = (F.ids.w & 1u) != 0u;
@@ -86,8 +88,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     let dir = unit_vec(h1);
     let r = SPAWN_RADIUS * pow(u01(hash3(i, frame * 3u + 2u, seed)), 1.0 / 3.0);
     p = dir * r;
-    phase = u01(hash3(i, frame * 3u + 3u, seed));
+    // the initial cloud gets staggered ages, so the first frames are not all newborn
+    born = F.screen.w - select(0.0, 8.0 * u01(hash3(i, 0x2545f491u, seed)), init);
   }
+  let age = F.screen.w - born;
+  // stable per particle for its whole life, redrawn at every respawn
+  let phase = u01(hash3(i, bitcast<u32>(born), seed));
 
   // shake: every particle is flung outward along its own hashed direction; the law pulls it back
   var extra = vec3f(0.0);
@@ -111,7 +117,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     let k2 = f_world_of(law, pm) + stir_velocity(pm) + extra;
     p += h * k2;
   }
-  parts[i] = vec4f(p, phase);
+  parts[i] = vec4f(p, born);
 
   if ((F.ids.w & 2u) == 0u) { return; }
 
@@ -137,9 +143,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   if (px.x < 0.0 || px.y < 0.0 || px.x >= res.x || px.y >= res.y) { return; }
 
   let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
+  // Newcomers are still falling toward the attractor. They are what makes the cloud read as
+  // streams rather than a fog, so they are dim and share one calm hue; once a particle has
+  // settled onto the attractor it takes the variant's full light.
+  let settled = smoothstep(F.tune.z, F.tune.w, age);
   let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION;
-  let wgt = select(1.0, TRACER_WEIGHT, tracer);
-  let col = max(shade(speed, phase, cz - F.lens.x, F.misc.x), vec3f(0.0)) * (wgt * FIXED);
+  let wgt = mix(select(F.tune.x, F.tune.y, tracer), select(1.0, OLD_TRACER_WEIGHT, tracer), settled);
+  let calm = mix(REFERENCE_SPEED, speed, settled);
+  let col = max(shade(calm, phase, cz - F.lens.x, F.misc.x), vec3f(0.0)) * (wgt * FIXED);
   atomicAdd(&accum[base], u32(col.r));
   atomicAdd(&accum[base + 1u], u32(col.g));
   atomicAdd(&accum[base + 2u], u32(col.b));

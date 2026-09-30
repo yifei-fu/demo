@@ -38,12 +38,16 @@ const START: vec3f = vec3f(0.31, -0.22, 0.27);
 
 struct St { x: vec3f, a: vec3f, b: vec3f, c: vec3f }
 
-fn jvp(L: Law, x: vec3f, q: vec3f) -> vec3f {
-  return (f_world_of(L, x + P.h * q) - f_world_of(L, x - P.h * q)) * (0.5 / P.h);
-}
-
+// The field and the three Jacobian-vector products (central differences), through a single call
+// site of f_world_of: GPU compilers inline it everywhere it is called, and this is the hot spot.
 fn deriv(L: Law, s: St) -> St {
-  return St(f_world_of(L, s.x), jvp(L, s.x, s.a), jvp(L, s.x, s.b), jvp(L, s.x, s.c));
+  var dir = array<vec3f, 7>(vec3f(0.0), s.a, -s.a, s.b, -s.b, s.c, -s.c);
+  var f: array<vec3f, 7>;
+  for (var k = 0u; k < 7u; k++) {
+    f[k] = f_world_of(L, s.x + P.h * dir[k]);
+  }
+  let inv = 0.5 / P.h;
+  return St(f[0], (f[1] - f[2]) * inv, (f[3] - f[4]) * inv, (f[5] - f[6]) * inv);
 }
 
 fn axpy(s: St, k: St, h: f32) -> St {
@@ -51,16 +55,18 @@ fn axpy(s: St, k: St, h: f32) -> St {
 }
 
 fn rk4(L: Law, s: St, h: f32) -> St {
-  let k1 = deriv(L, s);
-  let k2 = deriv(L, axpy(s, k1, 0.5 * h));
-  let k3 = deriv(L, axpy(s, k2, 0.5 * h));
-  let k4 = deriv(L, axpy(s, k3, h));
+  var k: array<St, 4>;
+  var y = s;
+  for (var i = 0u; i < 4u; i++) {
+    k[i] = deriv(L, y);
+    y = axpy(s, k[i], select(0.5 * h, h, i == 2u));
+  }
   let w = h / 6.0;
   return St(
-    s.x + w * (k1.x + 2.0 * (k2.x + k3.x) + k4.x),
-    s.a + w * (k1.a + 2.0 * (k2.a + k3.a) + k4.a),
-    s.b + w * (k1.b + 2.0 * (k2.b + k3.b) + k4.b),
-    s.c + w * (k1.c + 2.0 * (k2.c + k3.c) + k4.c),
+    s.x + w * (k[0].x + 2.0 * (k[1].x + k[2].x) + k[3].x),
+    s.a + w * (k[0].a + 2.0 * (k[1].a + k[2].a) + k[3].a),
+    s.b + w * (k[0].b + 2.0 * (k[1].b + k[2].b) + k[3].b),
+    s.c + w * (k[0].c + 2.0 * (k[1].c + k[2].c) + k[3].c),
   );
 }
 
@@ -128,12 +134,11 @@ fn lyap(@builtin(global_invocation_id) gid: vec3u) {
   var s = St(c.xt.xyz, c.q0.xyz, c.q1.xyz, c.q2.xyz);
   var t = c.xt.w;
   var g = vec3f(c.q0.w, c.q1.w, c.q2.w);
-  for (var i = 0u; i < P.steps; i += 2u) {
+  for (var i = 0u; i < P.steps; i++) {
     s = rk4(L, s, P.dt);
-    s = rk4(L, s, P.dt);
-    let t0 = t;
-    t += 2.0 * P.dt;
-    // modified Gram-Schmidt on the tangent frame; the norms are the growth factors
+    t += P.dt;
+    if ((i & 1u) == 0u) { continue; }
+    // every second step, modified Gram-Schmidt on the tangent frame; the norms are the growth
     let n0 = max(length(s.a), 1e-30);
     let a = s.a / n0;
     let b1 = s.b - dot(s.b, a) * a;
@@ -144,10 +149,9 @@ fn lyap(@builtin(global_invocation_id) gid: vec3u) {
     let n2 = max(length(c2), 1e-30);
     s = St(s.x, a, b, c2 / n2);
     g += log(vec3f(n0, n1, n2));
-    if (t0 < P.t_trans && t >= P.t_trans) { c.snap = vec4f(g, t); }
+    if (t - 2.0 * P.dt < P.t_trans && t >= P.t_trans) { c.snap = vec4f(g, t); }
   }
 
-  var out = vec4f(0.0);
   if (!(dot(s.x, s.x) < 1.0e4) || any(g != g)) {
     // escaped or NaN: start this cell again from a fresh hash
     c = fresh_cell(idx, c.info.y + 1.0);
@@ -173,14 +177,15 @@ fn lyap(@builtin(global_invocation_id) gid: vec3u) {
   c.q1 = vec4f(s.b, g.y);
   c.q2 = vec4f(s.c, g.z);
   cells[idx] = c;
-  textureStore(field_out, gid.xy, vec4f(d, reg, l.x, min(1.0, t / P.t_total)));
+  // r dimension, g regime, b the whole-number world it rounds to (for contours), a progress
+  textureStore(field_out, gid.xy, vec4f(d, reg, clamp(floor(d + 0.5), 0.0, 3.0), min(1.0, t / P.t_total)));
 }
 
 // ---------------------------------------------------------------------------------- lens
 
 struct LensParams {
   accent: vec4f,  // rgb tint, a = open (0 closed, 1 open)
-  view: vec4f,    // 1 / pixels across, grid side, unused, unused
+  view: vec4f,    // grid side, canvas pixels across the disk, device pixel ratio
 }
 
 @group(0) @binding(0) var<uniform> V: LensParams;
@@ -194,31 +199,115 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
   let q = vec2f(f32((i << 1u) & 2u), f32(i & 2u));  // a fullscreen triangle
   var o: VOut;
   o.pos = vec4f(q * 2.0 - 1.0, 0.0, 1.0);
-  o.p = vec2f(q.x * 2.0 - 1.0, 1.0 - q.y * 2.0) * 1.0;  // disk coordinates, v up
+  o.p = q * 2.0 - 1.0;  // disk coordinates, v up
   return o;
 }
 
-fn palette(d: f32) -> vec3f {
+// Cubic B-spline reconstruction of the field from four bilinear taps. Smoother than bilinear:
+// the contours come out as curves instead of chamfered staircases, and single-cell noise softens.
+fn smooth_field(uv: vec2f) -> vec4f {
+  let size = V.view.x;
+  let pos = uv * size - 0.5;
+  let ip = floor(pos);
+  let f = pos - ip;
+  let f2 = f * f;
+  let f3 = f2 * f;
+  let w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+  let w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  let w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  let w3 = f3 / 6.0;
+  let g0 = w0 + w1;
+  let g1 = w2 + w3;
+  let h0 = (ip - 0.5 + w1 / g0) / size;
+  let h1 = (ip + 1.5 + w3 / g1) / size;
+  let t00 = textureSampleLevel(field, samp, vec2f(h0.x, h0.y), 0.0);
+  let t10 = textureSampleLevel(field, samp, vec2f(h1.x, h0.y), 0.0);
+  let t01 = textureSampleLevel(field, samp, vec2f(h0.x, h1.y), 0.0);
+  let t11 = textureSampleLevel(field, samp, vec2f(h1.x, h1.y), 0.0);
+  return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
+// D 0 ink with a hint of depth, 1 cool, 2 warm, 2 to 3 a thin-film shimmer, 3 pale light. The
+// hues are the origin variant's own: indigo and azure, champagne, coral and rose, aqua.
+fn palette(d: f32, accent: vec3f) -> vec3f {
+  let ink = vec3f(0.010, 0.013, 0.030) + accent * 0.012;
+  let cool = mix(vec3f(0.10, 0.32, 0.92), accent, 0.2);
+  let warm = vec3f(0.98, 0.78, 0.46);
+  let coral = vec3f(1.0, 0.44, 0.44);
+  let rose = vec3f(0.92, 0.30, 0.70);
+  let aqua = vec3f(0.42, 0.90, 0.92);
+  let pale = mix(vec3f(0.96, 0.97, 1.0), accent, 0.10);
   let s = clamp(d, 0.0, 3.0);
-  let c0 = vec3f(0.012, 0.016, 0.034);
-  let c1 = vec3f(0.10, 0.27, 0.86);
-  let c2 = vec3f(1.0, 0.66, 0.24);
-  let c3 = vec3f(1.0, 1.0, 1.0);
-  let sp = 0.5 + 0.5 * cos(6.2831 * (vec3f(0.0, 0.33, 0.67) + (s - 2.0) * 1.6));
-  var col = mix(c0, c1, smoothstep(0.0, 1.0, s));
-  col = mix(col, c2, smoothstep(1.0, 2.0, s));
-  col = mix(col, mix(c2, sp, 0.8), smoothstep(2.0, 2.35, s));
-  col = mix(col, c3, smoothstep(2.6, 3.0, s));
-  return col;
+  var c = mix(ink, cool, smoothstep(0.0, 1.0, s));
+  c = mix(c, warm, smoothstep(1.0, 2.0, s));
+  c = mix(c, coral, smoothstep(2.0, 2.22, s));
+  c = mix(c, rose, smoothstep(2.22, 2.5, s));
+  c = mix(c, aqua, smoothstep(2.5, 2.76, s));
+  c = mix(c, pale, smoothstep(2.76, 3.0, s));
+  return c;
+}
+
+// How much the whole-number world changes within a few cells of here: 0 deep in a plateau,
+// rising towards a contour. A spiral of bilinear taps, turned per pixel so what is left of the
+// sampling error is fine grain rather than terraces.
+fn nearness(uv: vec2f, b0: f32, turn: f32) -> f32 {
+  let reach = 6.5 / V.view.x;
+  var acc = 0.0;
+  for (var i = 0; i < 20; i++) {
+    let a = f32(i) * 2.39996 + turn * 6.2832;
+    let rad = reach * sqrt((f32(i) + 0.5) / 20.0);
+    acc += abs(textureSampleLevel(field, samp, uv + vec2f(cos(a), sin(a)) * rad, 0.0).z - b0);
+  }
+  return smoothstep(0.0, 1.0, clamp(acc / 20.0 * 2.6, 0.0, 1.0));
+}
+
+fn white(p: vec2u) -> f32 {
+  return f32(hash(p.x + 4099u * p.y)) / 4294967295.0;
+}
+
+fn dither(p: vec2f) -> f32 {
+  return fract(52.9829189 * fract(dot(p, vec2f(0.06711056, 0.00583715)))) - 0.5;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4f {
+  let open = V.accent.a;
+  let acc = V.accent.rgb;
+  let dpr = V.view.z;
   let r = length(in.p);
-  let px = fwidth(r);
+  let px = max(fwidth(r), 1e-4);          // one canvas pixel, in disk units
   let disk = 1.0 - smoothstep(1.0 - px, 1.0 + px, r);
+
   let uv = vec2f(in.p.x * 0.5 + 0.5, 0.5 - in.p.y * 0.5);
-  let f = textureSampleLevel(field, samp, uv, 0.0);
-  let col = palette(f.x);
+  let f = smooth_field(uv);
+  let near = nearness(uv, f.z, white(vec2u(in.pos.xy)));
+  let ready = smoothstep(0.02, 0.4, f.w);
+  var col = palette(f.x, acc);
+
+  // light gathers at the contours and the plateaus lie deeper, like an engraved chart
+  col *= 0.8 + 0.5 * near;
+
+  // a faint bevel where the dimension changes fast: light from the upper left
+  let slope = vec2f(dpdx(f.x), dpdy(f.x)) * (V.view.y * 0.5) / V.view.x;
+  col *= 1.0 + clamp(0.7 * (slope.x + slope.y), -0.5, 0.5) * 0.5;
+
+  // crisp contours where the whole-number world changes: D = 1, 2 and 3 are the worlds entered
+  let gb = length(vec2f(dpdx(f.z), dpdy(f.z)));
+  let hw = mix(0.42, 0.55, open) * dpr;
+  var line = 0.0;
+  for (var k = 1; k <= 3; k++) {
+    let d = abs(f.z - (f32(k) - 0.5)) / max(gb, 1e-4);   // distance to the level, in pixels
+    line = max(line, select(0.8, 1.0, k == 1) * (1.0 - smoothstep(hw - 0.6, hw + 0.6, d)));
+  }
+  let ink = mix(vec3f(0.90, 0.94, 1.0), acc, 0.3);
+  col = mix(col, ink, line * 0.7 * ready);
+
+  // the lens itself: a dimmer rim, a hint of glass, and the r = 1 ring
+  col *= 1.0 - 0.34 * smoothstep(0.6, 1.0, r);
+  col += vec3f(0.55, 0.62, 0.85) * 0.045 * smoothstep(0.8, 0.0, length(in.p - vec2f(-0.34, 0.42)));
+  let ring = exp(-pow((r - (1.0 - 1.5 * px)) / (1.4 * px), 2.0));
+  col = mix(col, acc, ring * mix(0.16, 0.24, open));
+  col *= mix(0.55, 1.0, ready) * mix(0.9, 1.0, open);
+  col += dither(in.pos.xy) / 255.0;
   return vec4f(col * disk, disk);
 }

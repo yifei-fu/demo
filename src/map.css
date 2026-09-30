@@ -3,14 +3,14 @@
   --axm-lens: 76px;
   --axm-lens-bottom: calc(var(--sab, 0px) + 74px);
   --axm-open: min(90vw, 90dvh);
-  --axm-bead: 5px;
+  --axm-bead: 4px;
   --axm-ease: cubic-bezier(0.16, 1, 0.3, 1);
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 .axm-map.is-open {
-  --axm-bead: 11px;
+  --axm-bead: 10px;
 }
 
 .axm-scrim {
@@ -115,8 +115,8 @@
 .axm-bead::before {
   background: #fff;
   box-shadow:
-    0 0 5px 1px rgba(255, 255, 255, 0.85),
-    0 0 14px 3px color-mix(in srgb, var(--axm-accent, #9db8ff) 70%, transparent);
+    0 0 3px 0.5px rgba(255, 255, 255, 0.8),
+    0 0 9px 2px color-mix(in srgb, var(--axm-accent, #9db8ff) 60%, transparent);
 }
 .axm-bead::after {
   border: 1px solid color-mix(in srgb, var(--axm-accent, #9db8ff) 80%, #fff);
@@ -129,17 +129,18 @@
   }
   70%,
   100% {
-    transform: scale(3.4);
+    transform: scale(2.8);
     opacity: 0;
   }
 }
 
-/* legend and close, only when open */
+/* legend and close, only when open; the legend sits under the disk, or in the corner when the
+   screen is wider than tall */
 .axm-legend {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(var(--sab, 0px) + 22px);
+  top: calc(50% + var(--axm-open) / 2 + 18px);
   text-align: center;
   font: 400 9.5px/1 var(--mono, ui-monospace, monospace);
   letter-spacing: 0.22em;
@@ -205,8 +206,10 @@
   transition-delay: 0.25s;
 }
 
-@media (orientation: landscape) and (max-height: 520px) {
+@media (min-aspect-ratio: 1/1) {
   .axm-legend {
+    top: auto;
+    bottom: calc(var(--sab, 0px) + 22px);
     left: calc(var(--sal, 0px) + 18px);
     right: auto;
     text-align: left;

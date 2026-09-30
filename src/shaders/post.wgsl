@@ -1,4 +1,4 @@
-// Resolve (fractal-flame log density + trails), dual-Kawase bloom, composite (AgX, grain, vignette).
+// Resolve (flame-style density tonemap + trails), dual-Kawase bloom, composite (AgX, grain, vignette).
 
 struct Post {
   size: vec4f,  // width, height, 1/width, 1/height
@@ -6,19 +6,9 @@ struct Post {
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
   c: vec4f,     // pixels per particle, breath
   bg: vec4f,    // background, linear
+  t0: vec4f,    // light curve: gain, slope below the knee, slope above it, knee (density)
+  t1: vec4f,    // bloom: threshold, spread, energy cap
 }
-
-// How splatted density becomes light. Wisps come from a compressive log term, filaments and
-// ribbons from a power law, and a point-like core is allowed to run far into HDR.
-const DENSITY_K: f32 = 3.0;
-const LOG_GAIN: f32 = 0.006;
-const LOG_CONTRAST: f32 = 1.4;
-const LOG_CEILING: f32 = 1.0;
-const CORE_GAIN: f32 = 0.0143;
-const CORE_EXP: f32 = 0.7;
-// Bloom: soft threshold and the weight of each successively wider level.
-const BLOOM_THRESHOLD: f32 = 0.3;
-const BLOOM_SPREAD: f32 = 0.9;
 
 @group(0) @binding(0) var<uniform> P: Post;
 
@@ -45,17 +35,21 @@ fn cell(ip: vec2i) -> vec4f {
   return vec4f(accum[u32(c.y * w + c.x)]);
 }
 
-// log-density tonemap of an (rgb sum, count) cell
+// How splatted density becomes light: a power law that opens up wisps and filaments, bending to a
+// much shallower slope at the knee so dense sheets keep their internal detail and only a
+// point-like core runs far into HDR.
+fn light(x: f32) -> f32 {
+  let p1 = P.t0.y;
+  let p2 = P.t0.z;
+  return P.t0.x * pow(x, p1) * pow(1.0 + pow(x / P.t0.w, 2.0), -0.5 * (p1 - p2));
+}
+
 fn density(cellv: vec4f) -> vec3f {
   let cnt = cellv.w;
   if (cnt <= 0.0) { return vec3f(0.0); }
-  let avg = cellv.rgb / cnt;
   // density relative to a uniform spread over the screen, so brightness is resolution- and
-  // particle-count independent; the log keeps dense cores from clipping and faint wisps alive
-  let x = (cnt / FIXED) * P.c.x;
-  var g = log2(1.0 + DENSITY_K * x) / log2(1.0 + DENSITY_K * 8.0);
-  g = g / pow(1.0 + pow(g / LOG_CEILING, 4.0), 0.25);  // soft ceiling: the log term stops short of the cores
-  return avg * (LOG_GAIN * pow(g, LOG_CONTRAST) + CORE_GAIN * pow(x, CORE_EXP));
+  // particle-count independent
+  return (cellv.rgb / cnt) * light((cnt / FIXED) * P.c.x);
 }
 
 @fragment
@@ -66,7 +60,7 @@ fn fs_resolve(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 
   // adaptive density estimation: where the splat is sparse (a few stray particles), smooth it over
   // a 3x3 tent so dust reads as soft haze rather than speckle; dense regions stay razor sharp
-  let sparse = 1.0 - smoothstep(2.0, 10.0, mid.w / FIXED);
+  let sparse = 1.0 - smoothstep(6.0, 40.0, mid.w / FIXED);
   if (sparse > 0.0) {
     var s = mid * 4.0;
     s += (cell(ip + vec2i(-1, 0)) + cell(ip + vec2i(1, 0)) + cell(ip + vec2i(0, -1)) + cell(ip + vec2i(0, 1))) * 2.0;
@@ -87,9 +81,9 @@ fn tap(uv: vec2f) -> vec3f { return textureSampleLevel(srcTex, samp, uv, 0.0).rg
 
 fn knee(c0: vec3f) -> vec3f {
   // a delta-like core holds enormous energy; compress it so the halo stays a glow, not a flood
-  let c = c0 / (1.0 + max(c0.r, max(c0.g, c0.b)) / 24.0);
+  let c = c0 / (1.0 + max(c0.r, max(c0.g, c0.b)) / P.t1.z);
   // soft threshold: only what is genuinely bright feeds the halo
-  let t = BLOOM_THRESHOLD;
+  let t = P.t1.x;
   let k = 0.3 * t + 0.02;
   let l = max(c.r, max(c.g, c.b));
   let soft = clamp(l - t + k, 0.0, 2.0 * k);
@@ -137,7 +131,7 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   sum += tap(uv + vec2f(h.x, -h.y)) * 2.0;
   sum += tap(uv + vec2f(0.0, -h.y * 2.0));
   sum += tap(uv + vec2f(-h.x, -h.y)) * 2.0;
-  return vec4f(sum / 12.0 * BLOOM_SPREAD, 1.0);
+  return vec4f(sum / 12.0 * P.t1.y, 1.0);
 }
 
 // ---------------------------------------------------------------- composite

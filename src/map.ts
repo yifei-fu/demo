@@ -19,9 +19,9 @@ export interface ParamMap {
 const GRID_PHONE = 128;
 const GRID_DESKTOP = 192;
 /** Cells computed beyond the unit circle, so the bilinear rim is the true rim. */
-const RIM_CELLS = 1.5;
+const RIM_CELLS = 2.5;
 /** World time per RK4 step, the finite-difference step of the Jacobian products, and the horizon. */
-const DT = 0.04;
+const DT = 0.05;
 const FD_STEP = 0.01;
 const T_TRANSIENT = 24;
 const T_TOTAL = 120;
@@ -30,8 +30,10 @@ const BUDGET_MS = 2;
 const MAX_STEPS = 64;
 const OPEN_MS = 600;
 const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
-const BEAD_CLOSED = 5;
-const BEAD_OPEN = 11;
+const TAP_SLOP = 12;
+const TAP_MS = 500;
+const BEAD_CLOSED = 4;
+const BEAD_OPEN = 10;
 const MAX_BACKING = 2048;
 const PARAM_BYTES = 48;
 const LENS_BYTES = 32;
@@ -80,8 +82,9 @@ class Lens implements ParamMap {
   private animating = false;
   private dragging = false;
   private anims: Animation[] = [];
-  private bu = NaN;
-  private bv = NaN;
+  private bu = 0;
+  private bv = 0;
+  private placedSize = 0;
 
   private readonly n: number;
   private readonly rim: number;
@@ -97,6 +100,8 @@ class Lens implements ParamMap {
   private dirty = true;
   private lastNow = 0;
   private slow = 0;
+  /** `?mapsteps=` pins the rate (tests on software GPUs); otherwise it is measured and guarded. */
+  private readonly pinned: boolean;
 
   private readonly device: GPUDevice;
   private readonly paramBuf: GPUBuffer;
@@ -119,7 +124,7 @@ class Lens implements ParamMap {
   private readonly abort = new AbortController();
 
   constructor(
-    private readonly gpu: Gpu,
+    gpu: Gpu,
     core: Core,
     private readonly seed: number,
     private readonly host: HTMLElement,
@@ -128,11 +133,13 @@ class Lens implements ParamMap {
     const device = (this.device = gpu.device);
     const q = new URLSearchParams(location.search);
     const gridFlag = Number(q.get('mapn'));
-    this.n = gridFlag >= 16 ? Math.min(256, Math.floor(gridFlag)) : isPhone() ? GRID_PHONE : GRID_DESKTOP;
+    this.n =
+      gridFlag >= 16 ? Math.min(256, Math.floor(gridFlag)) : isPhone() ? GRID_PHONE : GRID_DESKTOP;
     this.rim = (RIM_CELLS * 2) / this.n;
     this.groups = Math.ceil(this.n / 8);
     const stepsFlag = Number(q.get('mapsteps'));
-    if (stepsFlag >= 2) this.stepsPerFrame = even(stepsFlag);
+    this.pinned = stepsFlag >= 2;
+    if (this.pinned) this.stepsPerFrame = even(stepsFlag);
 
     const cells = this.n * this.n;
     const laws = lawGrid(core, seed, this.n, this.rim);
@@ -183,7 +190,10 @@ class Lens implements ParamMap {
       entries: [
         { binding: 0, resource: { buffer: this.lensBuf } },
         { binding: 1, resource: this.field.createView() },
-        { binding: 2, resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) },
+        {
+          binding: 2,
+          resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
+        },
       ],
     });
 
@@ -203,8 +213,7 @@ class Lens implements ParamMap {
     };
 
     const [r, g, b] = cssRgb(accent);
-    this.lensData.set([r, g, b, 0]);
-    this.lensData[4] = this.n;
+    this.lensData.set([r, g, b, 0, this.n]);
     this.buildDom(accent);
     this.fit();
     this.resizer = new ResizeObserver(() => {
@@ -233,7 +242,7 @@ class Lens implements ParamMap {
       this.dirty = true;
       this.guardFrameTime();
     }
-    if (this.dirty && !this.animating) this.draw(encoder);
+    if (this.dirty) this.draw(encoder);
   }
 
   dispose(): void {
@@ -286,13 +295,15 @@ class Lens implements ParamMap {
       return performance.now() - t0;
     };
     await run(0); // warm the pipeline (this also initialises the cells)
-    const few = 2;
-    const t1 = await run(few);
-    let perStep = t1 / few;
-    if (t1 < 40) {
-      const many = even(Math.min(MAX_STEPS, (10 * few) / Math.max(perStep, 0.05)));
-      const t2 = await run(many);
-      if (t2 > t1) perStep = (t2 - t1) / (many - few);
+    let fewer = 2;
+    let tFewer = await run(fewer);
+    let perStep = tFewer / fewer;
+    // a fast GPU hides in the queue latency: lengthen the second run until the difference shows
+    for (let more = 8; tFewer < 40 && more <= 4 * MAX_STEPS; more *= 4) {
+      const tMore = await run(more);
+      perStep = tMore > tFewer + 2 ? (tMore - tFewer) / (more - fewer) : tMore / more;
+      if (tMore > tFewer + 2) break;
+      [fewer, tFewer] = [more, tMore];
     }
     if (this.disposed) return;
     this.stepsPerFrame = Math.min(MAX_STEPS, even(BUDGET_MS / Math.max(perStep, 1e-3)));
@@ -301,10 +312,11 @@ class Lens implements ParamMap {
 
   /** If frames turn slow while the map is still computing, ease off whatever the cause. */
   private guardFrameTime(): void {
+    if (this.pinned) return;
     const now = performance.now();
     const ms = this.lastNow ? now - this.lastNow : 0;
     this.lastNow = now;
-    this.slow = ms > 34 ? this.slow + 1 : Math.max(0, this.slow - 1);
+    this.slow = ms > 42 ? this.slow + 1 : Math.max(0, this.slow - 1);
     if (this.slow > 6 && this.stepsPerFrame > 2) {
       this.stepsPerFrame = even(this.stepsPerFrame / 2);
       this.slow = 0;
@@ -316,6 +328,8 @@ class Lens implements ParamMap {
   private draw(enc: GPUCommandEncoder): void {
     this.dirty = false;
     this.lensData[3] = this.isOpen ? 1 : 0;
+    this.lensData[5] = this.canvas.width;
+    this.lensData[6] = Math.min(window.devicePixelRatio || 1, 3);
     this.device.queue.writeBuffer(this.lensBuf, 0, this.lensData);
     const att = (this.pass.colorAttachments as GPURenderPassColorAttachment[])[0];
     att.view = this.ctx.getCurrentTexture().createView();
@@ -342,10 +356,11 @@ class Lens implements ParamMap {
   }
 
   private placeBead(u: number, v: number): void {
-    if (u === this.bu && v === this.bv) return;
+    const s = this.disk.clientWidth;
+    if (u === this.bu && v === this.bv && s === this.placedSize) return;
     this.bu = u;
     this.bv = v;
-    const s = this.disk.clientWidth;
+    this.placedSize = s;
     this.beadEl.style.transform = `translate(${((u + 1) * s) / 2}px, ${((1 - v) * s) / 2}px)`;
   }
 
@@ -357,11 +372,11 @@ class Lens implements ParamMap {
     this.anims.length = 0;
     this.root.classList.toggle('is-open', opening);
     this.disk.setAttribute('aria-expanded', String(opening));
-    this.lensData[3] = opening ? 1 : 0;
-    // opening draws at the final size at once (a big canvas shrunk is crisp); closing waits
-    if (opening && this.fit()) this.redraw();
-    else this.dirty = true;
-    this.bu = NaN;
+    // opening draws at the final size at once (a big canvas shrunk is crisp); closing keeps the
+    // big canvas until it has arrived
+    if (opening) this.fit();
+    this.redraw();
+    this.placeBead(this.bu, this.bv);
     const to = this.disk.getBoundingClientRect();
     const scale = from.width / to.width;
     const dx = from.left + from.width / 2 - (to.left + to.width / 2);
@@ -376,16 +391,13 @@ class Lens implements ParamMap {
     );
     this.anims.push(
       move,
-      this.beadEl.animate(
-        [{ scale: beadThen / (beadNow * scale) }, { scale: 1 }],
-        timing,
-      ),
+      this.beadEl.animate([{ scale: beadThen / (beadNow * scale) }, { scale: 1 }], timing),
     );
     this.animating = true;
     move.onfinish = () => {
       this.animating = false;
       if (this.disposed) return;
-      if (this.fit() || this.dirty) this.redraw();
+      if (this.fit()) this.redraw();
     };
   }
 
@@ -427,7 +439,8 @@ class Lens implements ParamMap {
     const close = el('button', 'axm-close');
     close.type = 'button';
     close.ariaLabel = 'Close map';
-    close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    close.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
     root.append(scrim, disk, legend, close);
     this.host.append(root);
 
@@ -441,22 +454,56 @@ class Lens implements ParamMap {
       },
       on,
     );
+    // Only a lone finger picks or closes: a pinch (which the engine hears) must not move the bead
+    // or shut the map at its first touch.
+    const down = new Set<number>();
+    let tap: { id: number; x: number; y: number; t: number } | null = null;
+    root.addEventListener('pointerdown', (e) => down.add(e.pointerId), { ...on, capture: true });
+    const lift = (e: PointerEvent): void => void down.delete(e.pointerId);
+    root.addEventListener('pointerup', lift, on);
+    root.addEventListener('pointercancel', lift, on);
     disk.addEventListener(
       'pointerdown',
       (e) => {
         if (!this.isOpen) return;
         e.preventDefault();
-        this.dragging = true;
+        this.dragging = down.size === 1;
+        if (!this.dragging) return;
         disk.setPointerCapture(e.pointerId);
         this.pick(e);
       },
       on,
     );
-    disk.addEventListener('pointermove', (e) => this.dragging && this.pick(e), on);
+    disk.addEventListener(
+      'pointermove',
+      (e) => this.dragging && down.size === 1 && this.pick(e),
+      on,
+    );
     const release = (): void => void (this.dragging = false);
     disk.addEventListener('pointerup', release, on);
     disk.addEventListener('pointercancel', release, on);
-    scrim.addEventListener('pointerdown', () => this.userToggle(false), on);
+    scrim.addEventListener(
+      'pointerdown',
+      (e) =>
+        (tap =
+          down.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp } : null),
+      on,
+    );
+    scrim.addEventListener(
+      'pointermove',
+      (e) => tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > TAP_SLOP && (tap = null),
+      on,
+    );
+    scrim.addEventListener(
+      'pointerup',
+      (e) => {
+        const ok = tap && tap.id === e.pointerId && e.timeStamp - tap.t < TAP_MS;
+        tap = null;
+        if (ok) this.userToggle(false);
+      },
+      on,
+    );
+    scrim.addEventListener('pointercancel', () => (tap = null), on);
     close.addEventListener('click', () => this.userToggle(false), on);
     window.addEventListener('keydown', (e) => e.key === 'Escape' && this.userToggle(false), on);
   }
