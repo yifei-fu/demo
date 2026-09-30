@@ -13,7 +13,7 @@ export const variant: Variant = {
   render: {
     exposure: 14,
     trail: 0.94,
-    dof: 1.15,
+    dof: 1.25,
     bloom: 4,
     clarity: 0.7,
     // the bleed around a dense core is warmer than the core itself: more blue is absorbed in the halo

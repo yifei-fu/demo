@@ -36,7 +36,7 @@ impl Prism {
                     (self.carrier[k][j] + TAU * fc * (1.0 + sign * DETUNE) / ctx.sr) % TAU;
                 bell += (self.carrier[k][j] + m).sin();
             }
-            let a = (p.level / LEVEL_REF).min(1.0);
+            let a = (p.level / LEVEL_REF).min(3.5 * p.ceil).min(1.0);
             let v = 0.5 * bell * a * GAIN * p.amp / 0.45;
             let (gl, gr) = pan_gains(p.pan);
             l += v * gl;

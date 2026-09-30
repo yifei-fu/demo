@@ -11,6 +11,8 @@ export interface Gpu {
   hdrHeadroom: number;
   /** Largest pixel count the accumulation buffer may hold (storage binding limit / 16 B). */
   maxPixels: number;
+  /** true when the device was created with timestamp queries (only asked for by ?perf). */
+  timestamps: boolean;
   /** Resolves with a human-readable reason when the device is lost. */
   lost: Promise<string>;
 }
@@ -18,6 +20,8 @@ export interface Gpu {
 export interface GpuOptions {
   /** `0` forces the SDR path, `1` forces the HDR path even without an HDR display. */
   hdr: '0' | '1' | 'auto';
+  /** Ask for GPU timestamp queries where the adapter has them (for the ?perf overlay). */
+  timestamps?: boolean;
 }
 
 const HDR_HEADROOM = 1.7;
@@ -33,7 +37,11 @@ export async function initGpu(canvas: HTMLCanvasElement, opts: GpuOptions): Prom
   const requiredLimits: Record<string, number> = {};
   for (const k of wanted) requiredLimits[k] = adapter.limits[k];
 
-  const device = await adapter.requestDevice({ requiredLimits });
+  const timestamps = !!opts.timestamps && adapter.features.has('timestamp-query');
+  const device = await adapter.requestDevice({
+    requiredLimits,
+    requiredFeatures: timestamps ? ['timestamp-query'] : [],
+  });
   device.onuncapturederror = (e) => console.error('[axiom] WebGPU error:', e.error.message);
   const lost = device.lost.then((info) =>
     info.reason === 'destroyed' ? 'destroyed' : info.message || 'the GPU device was lost',
@@ -51,7 +59,7 @@ export async function initGpu(canvas: HTMLCanvasElement, opts: GpuOptions): Prom
 
   const hdrHeadroom = extended ? headroomFor(opts) : 1;
   const maxPixels = Math.floor(device.limits.maxStorageBufferBindingSize / BYTES_PER_PIXEL);
-  return { device, canvas, context, format, extended, hdrHeadroom, maxPixels, lost };
+  return { device, canvas, context, format, extended, hdrHeadroom, maxPixels, timestamps, lost };
 }
 
 function headroomFor(opts: GpuOptions): number {

@@ -4,6 +4,7 @@ import type { ParamMap } from './map';
 import { Framing } from './framing';
 import { Bead, CameraRig, DIST_FAR } from './navigator';
 import { Particles, type StirParams } from './particles';
+import type { PerfProbe } from './perf';
 import { Post, settingsFor, type PostSettings } from './post';
 import { Sensors } from './sensors';
 import type { Variant } from './variants/types';
@@ -56,6 +57,7 @@ export class Engine {
   /** After Begin: the autopilot may start and the opening breath calms down. */
   begun = false;
 
+  perf: PerfProbe | null = null;
   private map: ParamMap | null = null;
   private mapAmount = 0;
   private pinchAcc = 0;
@@ -83,6 +85,13 @@ export class Engine {
     this.updateLaw();
     this.spectrum = core.spectrumRead();
     this.resize(true);
+  }
+
+  /** GPU timing for the ?perf overlay: bracket the frame's first compute and last render pass. */
+  attachPerf(perf: PerfProbe): void {
+    this.perf = perf;
+    this.particles.timestamps = perf.begin;
+    this.post.timestamps = perf.end;
   }
 
   /** The map is optional; once attached the engine drives it and yields to it. */
@@ -201,12 +210,14 @@ export class Engine {
       );
       this.beadPos[0] = this.bead.u;
       this.beadPos[1] = this.bead.v;
+      this.perf?.resolve(enc);
       this.map?.frame(enc, this.beadPos, this.time);
     } else {
       this.sinceReset = 0;
     }
     this.gpu.device.queue.submit([enc.finish()]);
     this.particles.extent.collect();
+    this.perf?.collect();
   }
 
   /**

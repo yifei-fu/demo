@@ -21,6 +21,9 @@ fn flame_ember(t: f32, tint: f32) -> vec3f {
 
 fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let s = clamp(log2(max(speed, 0.04) / 0.08) / 4.9, 0.0, 1.0);
+  // speed contrast: the middle of the range is stretched, so within one attractor the slow parts smoulder
+  // in crimson and the fast ones burn gold, instead of everything being one orange
+  let sv = smoothstep(0.12, 0.88, s);
   let near = clamp(-depth, -1.2, 1.2);
   let glow = clamp(-depth, 0.0, 3.0);     // in front of the focal plane: a bokeh disc
   let far = clamp(depth, 0.0, 2.0);
@@ -33,7 +36,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   let spark = select(0.0, 1.0, phase > 0.30 && phase < 0.35);
 
   let jitter = 0.16 * (fract(phase * 7.31) - 0.5);
-  let t = clamp(s + jitter + 0.16 * near - 0.08 * far + 0.10 * focus + 0.25 * spark + 0.05 * (seed - 0.5), 0.0, 1.0);
+  let t = clamp(sv + jitter + 0.16 * near - 0.08 * far + 0.10 * focus + 0.25 * spark + 0.05 * (seed - 0.5), 0.0, 1.0);
   var c = flame_heat(t);
   // slow embers stay dim so that a dense red coal is not tinted pink by them
   if (cool) { c = flame_ember(clamp(s + 0.14 * near, 0.0, 1.0), seed) * mix(0.5, 1.8, smoothstep(0.1, 0.6, s)); }
@@ -42,7 +45,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   c = mix(c, vec3f(0.42, 0.10, 0.24), 0.3 * smoothstep(0.4, 1.4, far));
 
   // speed sets the burn: slow pile-ups smoulder, fast threads run hot
-  let burn = mix(0.6, 1.8, smoothstep(0.0, 0.8, s));
+  let burn = mix(0.55, 1.9, sv);
   // a particle that has come to rest has burned down into the one point: it ignites, and as the
   // point opens into a loop (Hopf) the star cools through orange to the crimson of a slow coal
   let star = 1.0 - smoothstep(0.02, 0.12, speed);

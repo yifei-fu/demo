@@ -66,6 +66,8 @@ export class Particles {
   private readonly f32 = new Float32Array(this.frameData);
   private readonly u32 = new Uint32Array(this.frameData);
   private bindGroup: GPUBindGroup | null = null;
+  /** Set once by the engine when GPU timing is on (?perf). */
+  timestamps: GPUComputePassTimestampWrites | undefined;
   /** Set each frame by the engine from the framing measurement. */
   refSpeed = 0.3;
   equalise = 0;
@@ -197,7 +199,10 @@ export class Particles {
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     const groups = Math.ceil(this.count / WORKGROUP);
-    const pass = encoder.beginComputePass({ label: 'particles' });
+    const pass = encoder.beginComputePass({
+      label: 'particles',
+      timestampWrites: this.timestamps,
+    });
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
     pass.dispatchWorkgroups(Math.min(groups, MAX_GROUPS_X), Math.ceil(groups / MAX_GROUPS_X));

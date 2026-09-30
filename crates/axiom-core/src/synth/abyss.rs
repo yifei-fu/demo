@@ -60,7 +60,7 @@ impl Abyss {
             } else {
                 1.0
             };
-            let v = lo * gain * swell * p.amp * 0.95;
+            let v = lo * gain * swell * p.swell * p.amp * 0.95;
             let (gl, gr) = pan_gains(p.pan);
             l += v * gl;
             r += v * gr;

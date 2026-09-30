@@ -24,7 +24,7 @@ impl Classic {
             } else {
                 1.0
             };
-            let v = self.lp[k] * gain * p.amp;
+            let v = self.lp[k] * gain * p.swell * p.amp;
             let (gl, gr) = pan_gains(p.pan);
             l += v * gl;
             r += v * gr;

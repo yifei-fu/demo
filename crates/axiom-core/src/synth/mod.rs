@@ -29,6 +29,13 @@ use dsp::{lowpass_coeff, smoothing, white, Ramp};
 use std::f64::consts::TAU;
 
 pub const MAX_FRAMES: usize = 256;
+
+fn tune(name: &str, default: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
 pub(crate) const PROBES: usize = 6;
 /// Harmonics of the root the probes may be tuned to (chosen per seed).
 const HARMONICS: [f32; 8] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0];
@@ -40,6 +47,17 @@ const NOISE_FLOOR: f32 = 2.0e-6;
 const STIR_KICK: f32 = 6.0e-4;
 /// Probe level above which the slow follower turns the gain down.
 pub(crate) const LEVEL_REF: f32 = 0.22;
+/// Onset swell: a probe's level may rise no faster than a ceiling that climbs
+/// `SWELL_RATE` dB per second toward `SWELL_HEADROOM` times the level and
+/// follows it back down after `SWELL_RELEASE`. A Hopf bifurcation grows in
+/// milliseconds at audio-rate probes; this turns that pop into a swell.
+const SWELL_RATE_DB: f32 = 24.0;
+const SWELL_RELEASE: f32 = 0.25;
+const SWELL_HEADROOM: f32 = 2.0;
+/// Level (in x units) the ceiling never falls below.
+const SWELL_FLOOR: f32 = 0.012;
+/// The peak detector's hold time.
+const SWELL_HOLD: f32 = 0.03;
 const CONTROL_EVERY: usize = 16;
 /// How fast a preset fades in and out.
 const CROSSFADE: f32 = 0.12;
@@ -132,6 +150,11 @@ struct Probe {
     dc_y: f32,
     ms: f32,
     speed: f32,
+    /// Peak detector on `dc` and the onset-swell ceiling above it.
+    peak: f32,
+    ceil: f32,
+    /// Running mean of z in world time (the Poincaré section Ink cuts at).
+    zm: f32,
 }
 
 /// What a voice sees of a probe on this sample.
@@ -147,6 +170,12 @@ pub(crate) struct ProbeView {
     pub mul: f32,
     pub pan: f32,
     pub amp: f32,
+    /// Onset gain in (0, 1]: below 1 while the probe's level is still rising.
+    pub swell: f32,
+    /// z minus its running mean: the height above the probe's own section.
+    pub dz: f32,
+    /// The ceiling that gain enforces on the probe's peak (x units).
+    pub ceil: f32,
 }
 
 /// Slowly varying settings shared by all voices for the current block.
@@ -157,6 +186,17 @@ pub(crate) struct Ctx {
     /// Low-pass coefficient of the classic voice (follows D, dive, chaos).
     pub lp_a: f32,
     pub rms_k: f32,
+    boost: f32,
+    rest: f32,
+    density: f32,
+    pub zmean: f32,
+    pub hyst: f32,
+    pub gap: f32,
+    /// Per-sample growth factor of the swell ceiling, its release coefficient
+    /// and the peak detector's decay.
+    swell_up: f32,
+    swell_down: f32,
+    swell_hold: f32,
 }
 
 pub struct Synth {
@@ -214,6 +254,9 @@ impl Synth {
                 dc_y: 0.0,
                 ms: 0.0,
                 speed: 0.0,
+                peak: 0.0,
+                ceil: SWELL_FLOOR,
+                zm: x[2] as f32,
             }
         });
         let look = Preset::Classic.look();
@@ -242,6 +285,15 @@ impl Synth {
                 stir: 0.0,
                 lp_a: 0.1,
                 rms_k: smoothing(1.0 / sr, 0.4),
+                boost: tune("INK_BOOST", 6.0),
+                rest: tune("INK_REST", 0.08),
+                density: tune("INK_DENSITY", 4e-6),
+                zmean: tune("INK_ZMEAN", 10.0),
+                hyst: tune("INK_HYST", 0.02),
+                gap: tune("INK_GAP", 0.08),
+                swell_up: (SWELL_RATE_DB * std::f32::consts::LN_10 / 20.0 / sr).exp(),
+                swell_down: smoothing(1.0 / sr, SWELL_RELEASE),
+                swell_hold: 1.0 - smoothing(1.0 / sr, SWELL_HOLD),
             },
             classic: classic::Classic::default(),
             ink: ink::Ink::new(sr),
@@ -301,8 +353,15 @@ impl Synth {
     fn shake(&mut self) {
         for p in self.probes.iter_mut() {
             p.x = self.rng.in_ball(1.1);
+            // Not an onset: let the scattered probes be heard at once.
+            p.ceil = 1.0;
         }
         self.wind.whoosh();
+    }
+
+    #[doc(hidden)]
+    pub fn debug_probes(&self) -> Vec<(V3, f32, f32)> {
+        self.probes.iter().map(|p| (p.x, p.speed, p.hz)).collect()
     }
 
     pub fn preset(&self) -> Preset {
@@ -363,7 +422,9 @@ impl Synth {
         let sr = self.sr as f64;
         let mut views = [ProbeView::default(); PROBES];
         for (p, view) in self.probes.iter_mut().zip(views.iter_mut()) {
-            let h = (TAU * p.hz as f64 / (omega * sr)).clamp(1e-6, 0.12);
+            let slow = if p.hz < 20.0 { 1.0 } else { 0.0 };
+            let dil = 1.0 + slow * self.ctx.boost * (-(p.speed / self.ctx.rest).powi(2)).exp();
+            let h = (TAU * p.hz as f64 * dil as f64 / (omega * sr)).clamp(1e-6, 0.12);
             let mut x = rk4(&self.law, p.x, h);
             if !x.iter().all(|v| v.is_finite() && v.abs() < 4.0) {
                 // A trajectory that escaped the basin: start it over.
@@ -375,16 +436,30 @@ impl Synth {
             // The state kick scales with the drive rate: it is per sample, and
             // a slow probe would otherwise be shaken far harder per world unit.
             let kick = stir * STIR_KICK * (p.hz / (55.0 * p.mul)).min(1.0).sqrt();
+            let floor = if slow > 0.0 {
+                (self.ctx.density * h as f32).sqrt()
+            } else {
+                NOISE_FLOOR
+            };
             for c in x.iter_mut() {
-                *c += ((kick + NOISE_FLOOR) * white(&mut self.rng)) as f64;
+                *c += ((kick + floor) * white(&mut self.rng)) as f64;
             }
             p.x = x;
+            p.zm += (x[2] as f32 - p.zm) * (h as f32 / self.ctx.zmean).min(1.0);
 
             let s = x[0] as f32;
             let dc = s - p.dc_x + 0.9975 * p.dc_y;
             p.dc_x = s;
             p.dc_y = dc;
             p.ms += self.ctx.rms_k * (dc * dc - p.ms);
+            p.peak = dc.abs().max(p.peak * self.ctx.swell_hold);
+            let goal = SWELL_HEADROOM * p.peak + SWELL_FLOOR;
+            p.ceil = if goal > p.ceil {
+                goal.min(p.ceil * self.ctx.swell_up)
+            } else {
+                p.ceil + self.ctx.swell_down * (goal - p.ceil)
+            };
+            let swell = if p.peak > p.ceil { p.ceil / p.peak } else { 1.0 };
             let target = (p.pan_bias + 1.1 * x[1] as f32).clamp(-1.0, 1.0);
             p.pan += 0.002 * (target - p.pan);
             *view = ProbeView {
@@ -395,6 +470,9 @@ impl Synth {
                 mul: p.mul,
                 pan: p.pan,
                 amp: p.amp,
+                swell,
+                dz: x[2] as f32 - p.zm,
+                ceil: p.ceil,
             };
         }
         views

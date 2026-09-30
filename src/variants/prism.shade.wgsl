@@ -55,7 +55,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   // Far from the focal plane (the dive) light drifts to a warm pearl, cream to rose, and stops
   // changing hue with speed, so bokeh discs are soft and pearly rather than striped or violet.
   let defocus = smoothstep(0.9, 2.2, abs(depth));
-  let pearl_d = 296.0 + 50.0 * s;
+  let pearl_d = 308.0 + 50.0 * s;
   let settled_d = mix(focused_d, pearl_d, 0.7 * defocus) + 12.0 * (phase - 0.5) + 60.0 * (seed - 0.5);
   // Falling light is split as by a prism: each newcomer keeps one hue of its own across a full cycle,
   // so the streams fan out as a spectrum and the faint haze between them averages to pearl.

@@ -81,6 +81,8 @@ export class Post {
   private downBG: GPUBindGroup[] = [];
   private upBG: GPUBindGroup[] = [];
   private compositeBG: GPUBindGroup[] = [];
+  /** Set once by the engine when GPU timing is on (?perf). */
+  timestamps: GPURenderPassTimestampWrites | undefined;
   private flip = 0;
   private width = 0;
   private height = 0;
@@ -268,8 +270,10 @@ export class Post {
       pipe: GPURenderPipeline,
       bg: GPUBindGroup,
       load: GPULoadOp = 'clear',
+      timestampWrites?: GPURenderPassTimestampWrites,
     ): void => {
       const pass = encoder.beginRenderPass({
+        timestampWrites,
         colorAttachments: [
           { view, loadOp: load, storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
         ],
@@ -291,7 +295,7 @@ export class Post {
       full(this.bloom[i].view, this.downPipe, this.downBG[i - 1]);
     for (let i = BLOOM_LEVELS - 2; i >= 0; i--)
       full(this.bloom[i].view, this.upPipe, this.upBG[i], 'load');
-    full(target, this.compositePipe, this.compositeBG[cur]);
+    full(target, this.compositePipe, this.compositeBG[cur], 'clear', this.timestamps);
     this.flip ^= 1;
   }
 

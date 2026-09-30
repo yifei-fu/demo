@@ -21,6 +21,7 @@ export interface HudCallbacks {
 
 export interface HudOptions {
   debug: boolean;
+  perf: boolean;
   gate: boolean;
   /** Shipped variants for the start screen's quiet row, and the one that is running. */
   variants: readonly { id: string; name: string }[];
@@ -34,6 +35,7 @@ export class Hud {
   private readonly readout = new Readout();
   private readonly mute: HTMLButtonElement;
   private readonly debugEl: HTMLElement | null;
+  private readonly perfEl: HTMLElement | null;
 
   constructor(root: HTMLElement, cb: HudCallbacks, opts: HudOptions) {
     this.root = root;
@@ -79,8 +81,10 @@ export class Hud {
     });
 
     this.debugEl = opts.debug ? el('div', 'debug') : null;
+    this.perfEl = opts.perf ? el('div', 'perf') : null;
     root.append(...(opts.gate ? [this.gate] : []), this.readout.el, this.mute);
     if (this.debugEl) root.append(this.debugEl);
+    if (this.perfEl) root.append(this.perfEl);
     if (!opts.gate) document.body.classList.add('begun');
   }
 
@@ -119,6 +123,10 @@ export class Hud {
   /** `time`: simulation seconds, so the readout behaves the same when tests step frames quickly. */
   setReadout(params: Float32Array, spectrum: SpectrumReading, time: number): void {
     this.readout.update(params, spectrum, time);
+  }
+
+  setPerf(text: string): void {
+    if (this.perfEl) this.perfEl.textContent = text;
   }
 
   setDebug(text: string): void {

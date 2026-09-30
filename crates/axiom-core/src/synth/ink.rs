@@ -130,6 +130,7 @@ pub struct Ink {
     sample_rate: f32,
     pool: Vec<Pluck>,
     armed: [bool; PROBES],
+    since: [f32; PROBES],
     /// Pitch of each probe's last pluck (Hz) and its hum.
     pitch: [f32; PROBES],
     hum_phase: [f32; PROBES],
@@ -144,6 +145,7 @@ impl Ink {
             sample_rate,
             pool: (0..VOICES).map(|_| Pluck::new(capacity)).collect(),
             armed: [false; PROBES],
+            since: [1.0; PROBES],
             pitch: [220.0; PROBES],
             hum_phase: [0.0; PROBES],
             hum_amp: [0.0; PROBES],
@@ -163,7 +165,8 @@ impl Ink {
         let freq = (ctx.root_hz * 4.0 * octave * SCALE[degree])
             .max(LOWEST_HZ)
             .min(0.4 * self.sample_rate);
-        let vigour = (0.25 + 0.5 * p.speed).clamp(0.25, 1.0);
+        let v = (p.speed / 0.35).min(1.0);
+        let vigour = v * (2.0 - v);
         let slot = self
             .pool
             .iter()
@@ -188,11 +191,12 @@ impl Ink {
     pub fn tick(&mut self, probes: &[ProbeView; PROBES], ctx: &Ctx, rng: &mut Rng) -> (f32, f32) {
         let (mut l, mut r) = (0.0, 0.0);
         for (k, p) in probes.iter().enumerate() {
-            let z = p.x[2] as f32;
-            if z < -HYSTERESIS {
+            self.since[k] += 1.0 / self.sample_rate;
+            if p.dz < -ctx.hyst {
                 self.armed[k] = true;
-            } else if self.armed[k] && z >= 0.0 {
+            } else if self.armed[k] && p.dz >= 0.0 && self.since[k] >= ctx.gap {
                 self.armed[k] = false;
+                self.since[k] = 0.0;
                 self.strike(k, p, ctx, rng);
             }
             // The quiet continuous voice: a hum that lives only while the probe moves.

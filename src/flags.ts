@@ -8,6 +8,10 @@ export interface Flags {
   variant: string | null;
   n: number | null;
   debug: boolean;
+  /** no HUD, lens or readout: the render alone, for hero captures */
+  clean: boolean;
+  /** a tiny frame-time overlay for testing on a real device */
+  perf: boolean;
   skipintro: boolean;
   capture: boolean;
   hdr: GpuOptions['hdr'];
@@ -26,6 +30,8 @@ export function parseFlags(search: string = location.search): Flags {
     variant: q.get('v'),
     n: n > 0 ? Math.min(MAX_PARTICLES, Math.max(1024, Math.floor(n))) : null,
     debug: q.has('debug'),
+    clean: q.has('clean'),
+    perf: q.has('perf'),
     // capture is deterministic and silent, so it implies skipintro
     skipintro: q.has('skipintro') || q.has('capture'),
     capture: q.has('capture'),

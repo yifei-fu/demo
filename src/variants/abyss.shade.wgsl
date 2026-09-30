@@ -29,7 +29,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
     let lean = fract(seed * 7.13);
     let hot = clamp(s * 1.3 + 0.5 * (lean - 0.5) + (phase / 0.03 - 0.5) * 0.2, 0.0, 1.0);
     c = mix(vec3f(0.30, 0.04, 1.00), vec3f(1.00, 0.05, 0.60), smoothstep(0.15, 0.85, hot));
-    c *= mix(0.5, 5.0, smoothstep(0.10, 0.45, s)) * mix(0.6, 1.0, near) * (1.0 + 0.25 * clamp(-depth - 1.0, 0.0, 1.0));
+    c *= mix(0.5, 4.6, smoothstep(0.10, 0.45, s)) * mix(0.6, 1.0, near);
     return c;
   }
   if (phase < 0.05) {

@@ -17,7 +17,7 @@ export const variant: Variant = {
     bloom: 30,
     grain: 0.013,
     aberration: 0.005,
-    clarity: 0.6,
+    clarity: 1.0,
     bloomTint: [0.55, 1, 0.9],
     finish: 'direct',
     background: [0.0039, 0.0196, 0.0353],

@@ -45,13 +45,15 @@ fn prism_glint(q: vec2f, h: f32) -> vec3f {
   let hair = exp(-0.5 * perp * perp / 0.25);
   let lobe = vec3f(0.45, 0.68, 0.92) * len;   // where blue, green and red peak along the ray
   let spread = 0.13 * len;
-  let split = exp(-0.5 * pow((vec3f(along) - lobe) / spread, vec3f(2.0)));
+  let t = (vec3f(along) - lobe) / spread;
+  let split = exp(-0.5 * t * t);
   let base = exp(-along / (0.16 * len));
   let ray = hair * (vec3f(base) + 0.8 * split * exp(-along / (0.9 * len)));
   // the ring: each colour turns at a slightly different radius
   let rho = length(q);
   let radii = vec3f(0.0085, 0.0095, 0.0106) * h;
-  let ring = 0.45 * exp(-0.5 * pow((vec3f(rho) - radii) / 0.6, vec3f(2.0)));
+  let u = (vec3f(rho) - radii) / 0.6;
+  let ring = 0.45 * exp(-0.5 * u * u);
   return ray + ring;
 }
 

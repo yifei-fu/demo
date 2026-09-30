@@ -4,8 +4,10 @@ import { Engine } from './engine';
 import { parseFlags } from './flags';
 import { initGpu, watchHdr, type Gpu } from './gpu';
 import { bindHooks, installHooks } from './hooks';
+import { Hints } from './hints';
 import { Hud, showFallback } from './hud';
 import { createParamMap } from './map';
+import { PerfProbe } from './perf';
 import { enterFullscreen, isPhone, keepAwake } from './platform';
 import { Quality } from './quality';
 import { Sound } from './sound';
@@ -18,6 +20,7 @@ const DESKTOP_PARTICLES = 1_048_576;
 const MAX_IN_FLIGHT = 3;
 /** Longest frame the simulation will integrate in one go; slower frames run in slow motion. */
 const MAX_FRAME_DT = 1 / 15;
+const CPU_SMOOTHING = 0.1;
 
 async function boot(): Promise<void> {
   const flags = parseFlags();
@@ -28,7 +31,7 @@ async function boot(): Promise<void> {
   const canvas = document.getElementById('stage') as HTMLCanvasElement;
 
   const [gpu, core] = await Promise.all([
-    initGpu(canvas, { hdr: flags.hdr }).catch((err): Gpu | null => {
+    initGpu(canvas, { hdr: flags.hdr, timestamps: flags.perf }).catch((err): Gpu | null => {
       console.error('[axiom] WebGPU initialisation failed:', err);
       return null;
     }),
@@ -46,12 +49,16 @@ async function boot(): Promise<void> {
   const quality = new Quality(budget);
   const sound = new Sound();
 
+  if (flags.clean) document.body.classList.add('clean');
+  if (flags.perf) engine.attachPerf(new PerfProbe(gpu));
   const mapHost = document.createElement('div');
   mapHost.className = 'map-host';
   ui.append(mapHost);
-  engine.attachMap(
-    createParamMap(gpu, core, flags.seed, mapHost, variant.hud.accent, variant.hud.theme),
-  );
+  const hints = new Hints(ui);
+  if (!flags.clean)
+    engine.attachMap(
+      createParamMap(gpu, core, flags.seed, mapHost, variant.hud.accent, variant.hud.theme),
+    );
 
   const hud = new Hud(
     ui,
@@ -66,6 +73,7 @@ async function boot(): Promise<void> {
           engine.sensors.arm();
           engine.begun = true;
           hud.dismissGate();
+          hints.afterBegin(engine);
           void sound.start(engine, variant).then((muted) => muted !== null && hud.setMuted(muted));
         });
       },
@@ -73,6 +81,7 @@ async function boot(): Promise<void> {
     },
     {
       debug: flags.debug,
+      perf: flags.perf,
       gate: !flags.skipintro,
       variants: VARIANTS,
       current: variant.id,
@@ -112,6 +121,7 @@ async function boot(): Promise<void> {
   let last = 0;
   let n = 0;
   let inFlight = 0;
+  let cpuMs = 0;
   let lost = false;
   void gpu.lost.then(() => (lost = true));
   const tick = (now: number): void => {
@@ -126,8 +136,10 @@ async function boot(): Promise<void> {
     if (inFlight >= MAX_IN_FLIGHT) return;
     const ms = last ? now - last : 1000 / 60;
     last = now;
+    const t0 = performance.now();
     engine.advance(Math.min(ms / 1000, MAX_FRAME_DT), true);
     sound.frame(engine);
+    cpuMs += (performance.now() - t0 - cpuMs) * CPU_SMOOTHING;
     inFlight++;
     void engine.settled().then(() => inFlight--);
 
@@ -137,7 +149,19 @@ async function boot(): Promise<void> {
       if (change.scale !== engine.scale) engine.setScale(change.scale);
     }
     fps = 1000 / quality.frameMs;
-    if (++n % 6 === 0) refreshReadout();
+    if (++n % 6 === 0) {
+      refreshReadout();
+      hints.update(engine, now);
+    }
+    if (flags.perf && n % 12 === 0) {
+      const gpuMs = engine.perf?.gpuMs;
+      hud.setPerf(
+        `${quality.frameMs.toFixed(1)} ms  ${fps.toFixed(0)} fps\n` +
+          (gpuMs != null ? `gpu ${gpuMs.toFixed(1)} ms` : 'gpu n/a') +
+          `  cpu ${cpuMs.toFixed(1)} ms\n` +
+          `x${engine.scale.toFixed(2)}  ${(engine.particles.active / 1000).toFixed(0)}k`,
+      );
+    }
     if (flags.debug && n % 15 === 0) {
       hud.setDebug(
         `${fps.toFixed(0)} fps  ${quality.frameMs.toFixed(1)} ms\n` +

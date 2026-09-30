@@ -178,6 +178,84 @@ body {
   outline: 1px solid var(--line-hi);
   outline-offset: 4px;
 }
+/* ------------------------------------------------------------ hints and overlays */
+.hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--sab) + 250px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--dim);
+  font: 400 9.5px/1.6 var(--sans);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 0 32px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.4s ease;
+}
+.hint.on {
+  opacity: 0.9;
+}
+.hint.text {
+  letter-spacing: 0.2em;
+  text-wrap: balance;
+}
+.hint svg {
+  width: 20px;
+  height: 27px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  transform-origin: 50% 60%;
+  animation: tilt 3.2s ease-in-out infinite;
+}
+@keyframes tilt {
+  0%,
+  100% {
+    transform: rotate(-16deg);
+  }
+  50% {
+    transform: rotate(16deg);
+  }
+}
+.pulse-lens .axm-map:not(.is-open) .axm-disk {
+  animation: lens-pulse 2.2s ease-in-out 1;
+}
+@keyframes lens-pulse {
+  40% {
+    filter: brightness(1.7);
+    box-shadow: 0 0 34px 6px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+}
+
+.perf {
+  position: absolute;
+  top: calc(var(--sat) + 8px);
+  left: calc(var(--sal) + 8px);
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(190, 255, 215, 0.92);
+  font: 10px/1.45 var(--mono);
+  white-space: pre;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.clean .readout,
+.clean .mute,
+.clean .map-host,
+.clean .debug,
+.clean .perf,
+.clean .hint {
+  display: none !important;
+}
+
 /* the quiet row of variants under Begin */
 .variants {
   display: flex;
@@ -217,7 +295,7 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(var(--sab) + 20px);
+  bottom: calc(var(--sab) + var(--readout-bottom));
   text-align: center;
   font-family: var(--mono);
   pointer-events: none;
@@ -229,23 +307,35 @@ body {
 }
 .readout .eq {
   font-size: 11.5px;
+  line-height: 16px;
   letter-spacing: 0.04em;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
 .readout .mix {
-  margin-top: 5px;
+  margin-top: 3px;
   font-size: 10px;
+  line-height: 14px;
   letter-spacing: 0.04em;
   color: var(--faint);
 }
 .readout .state {
-  margin-top: 8px;
+  margin-top: 9px;
   font-size: 9px;
+  line-height: 12px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
+}
+
+/* The bottom of the screen has a rhythm: readout (about 54 px tall), a gap, then the lens. */
+:root {
+  --readout-bottom: 22px;
+  --lens-gap: 30px;
+}
+.map-host .axm-map {
+  --axm-lens-bottom: calc(var(--sab) + var(--readout-bottom) + 54px + var(--lens-gap));
 }
 
 .map-host {
@@ -453,6 +543,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .hint svg,
   .begin,
   .fallback .glow,
   .fallback .point {

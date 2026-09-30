@@ -49,7 +49,8 @@ const HIST_RANGE: f32 = 2.0;
 const SPEED_BINS: u32 = 48u;
 const SPEED_BASE: f32 = -8.0;
 const SPEED_PER_OCTAVE: f32 = 3.0;
-const DEPTH_CUE: f32 = 5.0;          // e-folds of dimming across the attractor at full strength
+const DEPTH_CUE: f32 = 2.0;          // e-folds of dimming across the attractor at full strength
+const STREAK_LEN: f32 = 0.05;        // world units; streak length for volume-filling attractors
 const BOKEH_SAMPLE_PX: f32 = 4.5;    // a particle blurred wider than this deposits several samples
 const BOKEH_MAX_SAMPLES: u32 = 8u;
 const MIN_COC_PER_850PX: f32 = 1.0;   // splat softness, scaled with the height of the frame
@@ -107,7 +108,8 @@ fn splat(pos: vec3f, col: vec3f, wgt0: f32, hj: u32) {
   // the far side is dimmed and the near filaments stand out. Zero strength leaves light untouched.
   let radius = max(F.probe.w, 0.2);
   let far = clamp((cz - F.lens.x + radius) / (2.0 * radius), 0.0, 1.0);
-  let wgt = wgt0 * exp(-DEPTH_CUE * F.tone.w * far);
+  // (the gain keeps the picture as bright overall as it was without the cue)
+  let wgt = wgt0 * exp(DEPTH_CUE * F.tone.w * (0.35 - far));
   let cx = dot(d, F.right.xyz);
   let cy = dot(d, F.up.xyz);
   let ndc = vec2f(cx / cz * F.right.w, cy / cz * F.up.w);
@@ -202,9 +204,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 
   if ((F.ids.w & 2u) == 0u) { return; }
 
-  // draw at a random moment inside the frame: free motion blur
+  // Draw at a random point of the path just travelled: free motion blur. In a volume-filling
+  // attractor the flow is slow and the light a fog of dots, so each particle is drawn as a short
+  // streak of fixed length instead, and the fog resolves into flow lines.
   let hj = hash3(i, frame, seed ^ 0x9e3779b9u);
-  let q_draw = mix(p_before, p, u01(pcg(hj ^ 0x85ebca6bu)));
+  let step_v = p - p_before;
+  let step_len = length(step_v);
+  let streak = mix(step_len, max(step_len, STREAK_LEN), F.tone.w);
+  let q_draw = p - step_v / max(step_len, 1e-6) * (streak * u01(pcg(hj ^ 0x85ebca6bu)));
   let cz = dot(q_draw - F.eye.xyz, F.fwd.xyz);
   let depth = cz - F.lens.x;
 

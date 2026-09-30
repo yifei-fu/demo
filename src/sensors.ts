@@ -24,6 +24,8 @@ export class Sensors {
   onShake: (() => void) | null = null;
 
   private readonly pointers: Pointers;
+  /** true once any real orientation reading has arrived (a phone without a gyro never sets it) */
+  hasMotion = false;
   private armed = false;
   private rest: Pose | null = null;
   private restScreenAngle = 0;
@@ -129,6 +131,7 @@ export class Sensors {
 
   private onOrientation = (e: DeviceOrientationEvent): void => {
     if (e.beta === null || e.gamma === null) return;
+    this.hasMotion = true;
     const angle = this.screenAngle();
     const pose = poseFromEuler(e.alpha ?? 0, e.beta, e.gamma, angle);
     this.latest = pose;

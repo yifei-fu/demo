@@ -27,11 +27,11 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   // dim warm light also cools to ember red rather than to brown
   let cooling = (1.0 - smoothstep(0.03, 0.40, y)) * warm;
   c *= mix(vec3f(1.0), vec3f(1.12, 0.78, 0.60), cooling);
-  // haze recedes, so that dark voids open between the bright threads
-  c *= mix(0.78, 1.0, smoothstep(0.02, 0.4, y));
+  // an S in the mid-tones: haze recedes and threads come forward, so dark voids open between them
+  c *= mix(0.75, 1.3, smoothstep(0.03, 1.2, y));
 
   // heat: a lot of light leans toward gold whatever its hue, so the single point is a star
-  let heat = smoothstep(0.5, 9.0, y);
+  let heat = smoothstep(0.3, 6.0, y);
   let ember = mix(vec3f(1.0, 0.54, 0.16), vec3f(1.0, 0.70, 0.32), smoothstep(3.0, 40.0, y));
   c = mix(c, ember * y, heat * 0.7);
 
