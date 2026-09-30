@@ -7,6 +7,7 @@ const INK_PAPER: vec3f = vec3f(0.863, 0.815, 0.738);    // #efe9df in linear lig
 const INK_BLACK: vec3f = vec3f(0.0034, 0.0044, 0.0088); // dense sumi: cool, never quite neutral
 const INK_K: f32 = 3.7;
 const INK_SEAL_T: vec3f = vec3f(0.67, 0.050, 0.036);    // #c8372d over paper: what vermilion lets through
+const INK_THREAD: f32 = 1.0;   // extra depth for threads above the fog in volume-filling chaos
 const INK_GAMMA: f32 = 0.68;   // < 1 opens up the thin washes; dense ink still saturates to black
 
 // ------------------------------------------------------------------ paper
@@ -110,6 +111,10 @@ fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f {
   mg *= 0.34 + 0.66 * smoothstep(0.05, 0.55, mg);
   // the shoulder: a pooled dwell point keeps a gradient, navy at its rim and black at its heart
   mg = select(mg, 1.0 + 0.55 * log(max(mg, 1.0)), mg > 1.0);
+  // volume-filling chaos (D beyond ~2.4) is a mist with dark threads in it: what rises above the fog
+  // gets deeper, and loops, which never reach this, stay pure
+  let vol = smoothstep(2.3, 2.75, axiom_dky());
+  mg *= 1.0 + vol * INK_THREAD * smoothstep(0.03, 0.22, mg);
   // the foot of the sheet stays quiet, so the readout under the lens keeps its paper
   mg *= 1.0 - 0.45 * smoothstep(0.80, 0.97, uv.y);
   let dry = 1.0 - smoothstep(0.02, 0.22, mg);

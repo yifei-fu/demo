@@ -26,7 +26,7 @@ fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f {
   // In volume-filling chaos (D above about 2.4) the cloud is pushed harder toward embers and ash:
   // hotter, sparser threads over darker voids, so it reads as fire rather than fog.
   let vol = smoothstep(2.3, 2.75, axiom_dky());
-  let sv = mix(s, smoothstep(0.10, 0.90, s), 0.65 + 0.25 * vol);
+  let sv = mix(mix(s, smoothstep(0.10, 0.90, s), 0.65), smoothstep(0.36, 0.80, s), vol);
   let near = clamp(-depth, -1.2, 1.2);
   let glow = clamp(-depth, 0.0, 3.0);     // in front of the focal plane: a bokeh disc
   let far = clamp(depth, 0.0, 2.0);
