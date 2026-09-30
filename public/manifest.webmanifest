@@ -1,0 +1,13 @@
+{
+  "name": "AXIOM",
+  "short_name": "AXIOM",
+  "description": "One law, every world between stillness and chaos.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#05060a",
+  "theme_color": "#05060a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

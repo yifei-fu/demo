@@ -1,0 +1,24 @@
+{
+  "name": "axiom",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AXIOM: one law, every world between stillness and chaos.",
+  "scripts": {
+    "dev": "vite --port 5171",
+    "wasm": "bash scripts/build-wasm.sh",
+    "build": "npm run wasm && tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "cargo test --manifest-path crates/axiom-core/Cargo.toml",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "shots": "node scripts/shots.mjs"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74",
+    "playwright": "1.56.1",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  }
+}
