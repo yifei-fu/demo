@@ -26,9 +26,6 @@ export interface HudOptions {
   variants: readonly { id: string; name: string }[];
   current: string;
   seed: number;
-  accent: string;
-  /** Page colour of the void, as a CSS colour. */
-  ink: string;
 }
 
 export class Hud {
@@ -40,9 +37,6 @@ export class Hud {
 
   constructor(root: HTMLElement, cb: HudCallbacks, opts: HudOptions) {
     this.root = root;
-    document.documentElement.style.setProperty('--accent', opts.accent);
-    document.documentElement.style.setProperty('--ink', opts.ink);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', opts.ink);
 
     this.gate = el('div', 'gate');
     const head = el('header', 'gate-head');

@@ -9,6 +9,7 @@ import { createParamMap } from './map';
 import { enterFullscreen, isPhone, keepAwake } from './platform';
 import { Quality } from './quality';
 import { Sound } from './sound';
+import { applyTheme } from './theme';
 import { pickVariant, VARIANTS } from './variants';
 import { loadCore, type Core } from './wasm';
 
@@ -21,6 +22,7 @@ const MAX_FRAME_DT = 1 / 15;
 async function boot(): Promise<void> {
   const flags = parseFlags();
   const variant = pickVariant(flags.variant);
+  applyTheme(variant);
   const hooks = installHooks(variant.id);
   const ui = document.getElementById('ui') as HTMLElement;
   const canvas = document.getElementById('stage') as HTMLCanvasElement;
@@ -49,7 +51,6 @@ async function boot(): Promise<void> {
   ui.append(mapHost);
   engine.attachMap(createParamMap(gpu, core, flags.seed, mapHost, variant.hud.accent));
 
-  const [r, g, b] = variant.render.background.map((c) => Math.round(c * 255));
   const hud = new Hud(
     ui,
     {
@@ -74,8 +75,6 @@ async function boot(): Promise<void> {
       variants: VARIANTS,
       current: variant.id,
       seed: flags.seed,
-      accent: variant.hud.accent,
-      ink: `rgb(${r} ${g} ${b})`,
     },
   );
   void gpu.lost.then((reason) => hud.showLost(reason));

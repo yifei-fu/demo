@@ -3,6 +3,9 @@
   --text: rgba(226, 232, 255, 0.92);
   --dim: rgba(200, 210, 245, 0.5);
   --faint: rgba(190, 200, 240, 0.3);
+  --line: rgba(214, 224, 255, 0.34);
+  --line-hi: rgba(230, 236, 255, 0.6);
+  --title-glow: 0 0 40px rgba(140, 170, 255, 0.35);
   --accent: #9db8ff;
   --sans: -apple-system, 'SF Pro Display', Inter, system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
@@ -10,6 +13,16 @@
   --sab: env(safe-area-inset-bottom, 0px);
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
+}
+
+/* light variants (ink on paper): the same variables, darkened */
+:root[data-theme='light'] {
+  --text: rgba(30, 28, 26, 0.9);
+  --dim: rgba(38, 36, 33, 0.58);
+  --faint: rgba(38, 36, 33, 0.4);
+  --line: rgba(30, 28, 26, 0.34);
+  --line-hi: rgba(30, 28, 26, 0.62);
+  --title-glow: none;
 }
 
 *,
@@ -85,7 +98,7 @@ body {
   padding-left: 0.62em; /* balances the trailing tracking so the word sits centred */
   line-height: 1;
   color: var(--text);
-  text-shadow: 0 0 40px rgba(140, 170, 255, 0.35);
+  text-shadow: var(--title-glow);
 }
 .gate .sub {
   margin: 22px auto 0;
@@ -128,7 +141,7 @@ body {
 }
 .begin {
   appearance: none;
-  border: 1px solid rgba(214, 224, 255, 0.34);
+  border: 1px solid var(--line);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--text);
   font: 400 11px/1 var(--sans);
@@ -151,14 +164,14 @@ body {
   animation: pulse 5.2s ease-in-out infinite;
 }
 .begin:hover {
-  border-color: rgba(230, 236, 255, 0.6);
+  border-color: var(--line-hi);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .begin:active {
   transform: scale(0.97);
 }
 .begin:focus-visible {
-  outline: 1px solid rgba(230, 236, 255, 0.8);
+  outline: 1px solid var(--line-hi);
   outline-offset: 4px;
 }
 /* the quiet row of variants under Begin */
@@ -385,7 +398,7 @@ body {
   position: relative;
   margin-top: 22px;
   appearance: none;
-  border: 1px solid rgba(214, 224, 255, 0.34);
+  border: 1px solid var(--line);
   background: none;
   color: var(--text);
   font: 400 11px/1 var(--sans);
@@ -415,6 +428,24 @@ body {
   50% {
     opacity: 1;
   }
+}
+
+:root[data-theme='light'] .fallback .glow {
+  background: radial-gradient(
+    circle,
+    rgba(30, 28, 26, 0.32) 0,
+    rgba(30, 28, 26, 0.14) 5%,
+    rgba(30, 28, 26, 0.06) 18%,
+    rgba(30, 28, 26, 0.02) 40%,
+    transparent 68%
+  );
+}
+:root[data-theme='light'] .fallback .point {
+  background: #1a1816;
+  box-shadow: 0 0 10px 2px rgba(26, 24, 22, 0.5);
+}
+:root[data-theme='light'] .debug {
+  color: rgba(20, 90, 60, 0.85);
 }
 
 @media (prefers-reduced-motion: reduce) {

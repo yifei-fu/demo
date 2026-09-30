@@ -116,6 +116,7 @@ export class Post {
     this.upPipe = make('bloom up', 'fs_up', HDR_FORMAT, undefined, true);
     this.compositePipe = make('composite', 'fs_composite', gpu.format, {
       HDR_OUT: gpu.extended ? 1 : 0,
+      DIRECT: variant.render.finish === 'direct' ? 1 : 0,
     });
   }
 

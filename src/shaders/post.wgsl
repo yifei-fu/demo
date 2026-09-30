@@ -158,6 +158,7 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 @group(0) @binding(3) var csamp: sampler;
 
 override HDR_OUT: bool = false;
+override DIRECT: bool = false;  // the variant's grade() is the final colour: no background, no AgX
 
 // AgX (Troy Sobotka), minimal implementation with the polynomial sigmoid.
 const AGX_IN = mat3x3f(
@@ -218,14 +219,20 @@ fn fs_composite(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let vig = 1.0 - P.b.x * smoothstep(0.25, 1.05, r2);
   var lin = (c * P.a.x * P.c.y + bloom * P.a.z) * vig;
 
-  lin = grade(lin, uv, P.b.w);  // the variant's finish (its own file), still scene-referred
-  var enc = agx(lin + P.bg.rgb);
+  // the variant's finish (its own file): scene-referred for AgX, or the final colour when direct
+  lin = grade(lin, uv, P.b.w);
+  var enc = vec3f(0.0);
+  if (DIRECT) {
+    enc = srgb_encode(clamp(lin, vec3f(0.0), vec3f(P.b.z)));
+  } else {
+    enc = agx(lin + P.bg.rgb);
+  }
 
   // fine animated grain, weighted away from the deepest blacks; also dithers the dark gradients
   let n = hash12(pos.xy, P.b.w) + hash12(pos.xy + 17.0, P.b.w + 3.7) - 1.0;
   enc = max(enc + n * P.a.w * (0.35 + enc), vec3f(0.0));
 
-  if (HDR_OUT) {
+  if (HDR_OUT && !DIRECT) {
     // The extended canvas takes sRGB-encoded values that may exceed 1. Lift only the highlights, in
     // linear light, so everything below them is identical to the SDR path.
     var o = srgb_decode(enc);
