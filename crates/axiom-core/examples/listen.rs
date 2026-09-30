@@ -9,6 +9,15 @@
 //! Every preset is rendered twice (with and without the stir and shake events)
 //! at 48 kHz in 128-frame quanta; the events render is written to
 //! `<out_dir>/<name>.wav` (16-bit stereo) and the tables below are printed.
+//!
+//! Per segment: RMS (dB), the level above 200 Hz, peak, spectral centroid, the
+//! shares of energy below 200 Hz and above 4 kHz; then the steepest level rise
+//! per 100 ms, when the Hopf tone (or Ink) becomes audible and at which bead
+//! radius, the shake, and every preset's loudness relative to the classic one.
+//!
+//! Environment: `ONLY=<name prefix>` renders one preset; `SERIES=<from>,<to>`
+//! prints the level (dB, 50 ms windows) between those seconds; `PLUCKS=1`
+//! prints Ink's notes per second.
 
 use axiom_core::law::{write_params, PARAMS_LEN};
 use axiom_core::spectrum::Spectrum;
