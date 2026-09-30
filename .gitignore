@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vite/
+crates/**/target/
+src/assets/axiom.wasm
+shots/
+
+*.log
+npm-debug.log*
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

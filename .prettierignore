@@ -1,0 +1,6 @@
+dist
+crates
+src/assets
+shots
+package-lock.json
+docs

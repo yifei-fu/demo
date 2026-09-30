@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MANIFEST: crates/axiom-core/Cargo.toml
+  # Gzipped budget for everything in dist/ (js + css + wasm), in bytes.
+  SIZE_BUDGET_BYTES: 153600
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/axiom-core
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: cargo fmt
+        run: cargo fmt --manifest-path "$MANIFEST" --check
+      - name: cargo clippy
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --manifest-path "$MANIFEST"
+
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run build
+
+      - name: Size budget
+        run: |
+          node --input-type=module <<'JS'
+          import { readdirSync, readFileSync, appendFileSync, statSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { gzipSync } from 'node:zlib';
+
+          const budget = Number(process.env.SIZE_BUDGET_BYTES);
+          const walk = (dir) =>
+            readdirSync(dir).flatMap((name) => {
+              const p = join(dir, name);
+              return statSync(p).isDirectory() ? walk(p) : [p];
+            });
+
+          const rows = walk('dist')
+            .filter((p) => /\.(js|css|wasm)$/.test(p))
+            .map((p) => {
+              const raw = readFileSync(p);
+              return { file: p, raw: raw.length, gz: gzipSync(raw, { level: 9 }).length };
+            })
+            .sort((a, b) => b.gz - a.gz);
+          const total = rows.reduce((s, r) => s + r.gz, 0);
+          const kb = (n) => (n / 1024).toFixed(1);
+
+          const lines = [
+            '### Size budget',
+            '',
+            '| file | raw KB | gzip KB |',
+            '| --- | ---: | ---: |',
+            ...rows.map((r) => `| \`${r.file}\` | ${kb(r.raw)} | ${kb(r.gz)} |`),
+            `| **total** | | **${kb(total)} / ${kb(budget)}** |`,
+            '',
+          ];
+          console.log(lines.join('\n'));
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          }
+          if (rows.length === 0) {
+            console.error('::error::no js/css/wasm files found in dist/');
+            process.exit(1);
+          }
+          if (total > budget) {
+            console.error(`::error::gzipped total ${kb(total)} KB exceeds ${kb(budget)} KB budget`);
+            process.exit(1);
+          }
+          JS
+
+      - uses: actions/upload-pages-artifact@v4
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          path: dist
+
+  deploy:
+    needs: check
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
