@@ -130,6 +130,11 @@ Classic chaotic values: Thomas b=0.208186 (chaos below ≈0.208, labyrinth as b�
 α=0.95 β=0.7 γ=0.6 δ=3.5 ε=0.25 ζ=0.1; Lorenz σ=10 ρ=28 β=8/3; Rössler a=b=0.2 c=5.7;
 Halvorsen a=1.89.
 
+**As built (round 1):** Halvorsen (kind 4) is implemented but has no route, so 4 anchors sit on the rim at 90°.
+`confine_radius` = 1.2. κ(r) = 1.0·(1 − r/0.4)² for r < 0.4, else 0. Blend happens over the middle 40 %
+of each arc. World time ≈ real seconds; a loop takes about 4 s. Respawn particles with |x| > 1.6. Keep the
+RK2 substep dt ≤ 0.03.
+
 Each anchor has a **radial route**: its parameters (and its normalisation `c`, `L`, `τ`, `ω`) are
 smooth functions of `r ∈ [0,1]`, calibrated so that **r = 0 is a stable fixed point mapped to the
 world origin**, then Hopf → cycle → (torus for Aizawa) → chaos, with the attractor kept roughly
@@ -258,20 +263,69 @@ Sensor simulation uses real DOM events: `deviceorientation` (alpha/beta/gamma) a
 ---
 
 ## 6. Variants (round 2+)
-`src/variants/<id>.ts` (+ `<id>.wgsl`) export a `Variant`:
+Variants are art directions of the **same** piece: same law, same navigation. They differ in
+light, colour, finish and sound. `src/variants/<id>.ts` (+ `<id>.wgsl`) export a `Variant`:
 ```ts
 interface Variant {
   id: string; name: string; tagline: string;
-  anchors: number[];                 // kind ids in rim order
-  shadeWgsl: string;                 // fn shade(speed: f32, phase: f32, depth: f32) -> vec3f
-  gradeWgsl: string;                 // fn grade(hdr: vec3f, uv: vec2f) -> vec3f  (pre-tonemap)
+  shadeWgsl: string;   // fn shade(speed: f32, phase: f32, depth: f32, seed: f32) -> vec3f  (particle colour)
+  gradeWgsl: string;   // fn grade(hdr: vec3f, uv: vec2f, time: f32) -> vec3f          (pre-tonemap finish)
   render: { exposure: number; trail: number; dof: number; bloom: number; grain: number;
-            particleScale: number };
-  sound: { preset: number; rootHz: number };
-  hud: { accent: string };
+            aberration: number; background: [number, number, number] };
+  sound: { preset: number; rootHz: number };   // preset ids: 0 default · 1 ink · 2 prism · 3 abyss
+  hud: { accent: string };                     // CSS colour for HUD/lens accents
 }
 ```
-Selected via `?v=<id>`; the start screen lists the shipped variants.
+Registry in `src/variants/index.ts`; selected via `?v=<id>` (default = first entry); the start
+screen lists shipped variants as a quiet row of names.
+
+---
+
+## 8. Round-2 module interfaces
+Implementers code against these signatures exactly; owners create a compiling skeleton first.
+
+```ts
+// src/wasm.ts — engine owner. One main-thread instance of axiom.wasm.
+export interface SpectrumReading { l1: number; l2: number; l3: number; dky: number;
+                                   regime: number; tracer: [number, number, number] }
+export interface Core {
+  readonly bytes: ArrayBuffer;        // raw module bytes (posted to the AudioWorklet)
+  readonly anchorCount: number;
+  lawParams(u: number, v: number, seed: number, out?: Float32Array): Float32Array; // 68 f32, copied
+  spectrumStep(params: Float32Array, worldTime: number): void;
+  spectrumRead(): SpectrumReading;
+}
+export function loadCore(seed: number): Promise<Core>;
+
+// src/audio.ts — audio owner (worklet in src/audio-worklet.ts).
+export const enum SynthParam { Master = 0, Stir = 1, Dive = 2, Shake = 3, Preset = 4,
+                               RootHz = 5, Lambda1 = 6, Dky = 7 }
+export interface AudioEngine {
+  setLaw(params: Float32Array): void;          // call every frame; throttled internally to ≤ 30 Hz
+  set(id: SynthParam, value: number): void;    // smoothed internally where it matters
+  setMuted(muted: boolean): void;              // fades, never clicks
+  readonly muted: boolean;
+}
+export function unlockAudio(): AudioContext;   // call SYNCHRONOUSLY inside the Begin tap (iOS)
+export function startAudio(ctx: AudioContext, wasmBytes: ArrayBuffer, seed: number,
+                           sound: { preset: number; rootHz: number }): Promise<AudioEngine>;
+
+// src/map.ts — map owner (+ src/shaders/map.wgsl, src/map.css).
+export interface ParamMap {
+  frame(encoder: GPUCommandEncoder, bead: [number, number], time: number): void; // progressive compute + lens draw
+  setOpen(open: boolean): void;                // animated lens ↔ full-screen transition
+  readonly open: boolean;
+  onPick: ((u: number, v: number) => void) | null;   // engine sets; fired while dragging on the open map
+  onToggle: ((open: boolean) => void) | null;        // fired when the user taps the lens / closes the map
+  dispose(): void;
+}
+export function createParamMap(gpu: Gpu, core: Core, seed: number, host: HTMLElement,
+                               accent: string): ParamMap;
+```
+Parallel-work rule: while other agents edit `src/`, a Vite **dev** server hot-reloads under you.
+Verify against a **production build** in your own outDir served by `vite preview`
+(`npx vite build --outDir /tmp/<you>/dist && npx vite preview --outDir /tmp/<you>/dist --port <yours>`),
+then `node scripts/shots.mjs --url http://localhost:<yours>/ …`.
 
 ---
 
