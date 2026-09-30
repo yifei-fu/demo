@@ -7,7 +7,7 @@ const INK_PAPER: vec3f = vec3f(0.863, 0.815, 0.738);    // #efe9df in linear lig
 const INK_BLACK: vec3f = vec3f(0.0034, 0.0044, 0.0088); // dense sumi: cool, never quite neutral
 const INK_K: f32 = 3.7;
 const INK_SEAL_T: vec3f = vec3f(0.67, 0.050, 0.036);    // #c8372d over paper: what vermilion lets through
-const INK_THREAD: f32 = 1.0;   // extra depth for threads above the fog in volume-filling chaos
+const INK_THREAD: f32 = 0.55;  // extra depth for threads above the fog in volume-filling chaos
 const INK_GAMMA: f32 = 0.68;   // < 1 opens up the thin washes; dense ink still saturates to black
 
 // ------------------------------------------------------------------ paper
