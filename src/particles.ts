@@ -3,8 +3,8 @@ import { createShader, createUniform, type Gpu } from './gpu';
 import { LAW_LEN } from './law';
 import type { CameraState } from './navigator';
 import lawWgsl from './shaders/law.wgsl?raw';
-import shadeWgsl from './shaders/shade.wgsl?raw';
 import particlesWgsl from './shaders/particles.wgsl?raw';
+import type { Variant } from './variants/types';
 
 const WORKGROUP = 64;
 const MAX_GROUPS_X = 65535;
@@ -15,6 +15,8 @@ const SHAKE_DECAY = 3.2; // 1/s
 const APERTURE = 0.0072; // circle of confusion per unit relative depth, as a fraction of height
 const MAX_COC = 0.045; // fraction of height
 const NEAR = 0.03;
+const MAX_SUBSTEP_DT = 0.03; // world time; keeps RK2 accurate on a fast law at low fps
+const MAX_SUBSTEPS = 4;
 const TAN_HALF = 0.4;
 const STIR_RADIUS = 0.16; // of the half-height of the screen
 const PARTICLE_BYTES = 16;
@@ -54,13 +56,14 @@ export class Particles {
   private shakeEnergy = 0;
   private shakeId = 0;
   private readonly seed: number;
-  private readonly paletteShift: number;
+  private readonly seedFraction: number;
+  private readonly aperture: number;
 
-  constructor(gpu: Gpu, count: number, seed: number) {
+  constructor(gpu: Gpu, count: number, seed: number, variant: Variant) {
     this.device = gpu.device;
     this.seed = seed >>> 0;
-    // seed -> a small slide along the palette, so every visit has its own cast
-    this.paletteShift = ((Math.imul(seed >>> 0, 2654435761) >>> 0) / 2 ** 32) * 0.16 - 0.08;
+    this.seedFraction = (Math.imul(seed >>> 0, 2654435761) >>> 0) / 2 ** 32;
+    this.aperture = APERTURE * variant.render.dof;
     this.capacity = count;
     this.count = count;
     const device = gpu.device;
@@ -71,7 +74,11 @@ export class Particles {
     });
     this.lawBuf = createUniform(device, LAW_LEN * 4 + 16, 'law');
     this.frameBuf = createUniform(device, FRAME_FLOATS * 4, 'frame');
-    const module = createShader(device, lawWgsl + shadeWgsl + particlesWgsl, 'particles');
+    const module = createShader(
+      device,
+      lawWgsl + variant.shadeWgsl + particlesWgsl,
+      `particles/${variant.id}`,
+    );
     this.pipeline = device.createComputePipeline({
       label: 'particles',
       layout: 'auto',
@@ -148,10 +155,18 @@ export class Particles {
     if (this.shakeEnergy < 0.004) this.shakeEnergy = 0;
 
     f.set([width, height, p.dt, p.time], 20);
-    f.set([cam.focus, APERTURE * height, NEAR, MAX_COC * height], 24);
+    f.set([cam.focus, this.aperture * height, NEAR, MAX_COC * height], 24);
     f.set([s.x, s.y, s.active ? s.strength : 0, 0], 28);
     f.set([s.vx, s.vy, this.shakeEnergy, this.shakeId], 32);
-    f.set([this.paletteShift, 0, 0, 0], 36);
+    f.set(
+      [
+        this.seedFraction,
+        Math.min(MAX_SUBSTEPS, Math.max(2, Math.ceil(p.dt / MAX_SUBSTEP_DT))),
+        0,
+        0,
+      ],
+      36,
+    );
     this.u32.set(
       [p.frame >>> 0, this.count, this.seed, extraFlags | (p.splat ? FLAG_SPLAT : 0)],
       40,

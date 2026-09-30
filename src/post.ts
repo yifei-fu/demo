@@ -1,10 +1,12 @@
 /** Resolve, trails, dual-Kawase bloom and the final composite. */
 import { createShader, createUniform, type Gpu } from './gpu';
 import postWgsl from './shaders/post.wgsl?raw';
+import type { Variant } from './variants/types';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 const BLOOM_LEVELS = 5;
-const UNIFORM_FLOATS = 16;
+const UNIFORM_FLOATS = 20;
+const VIGNETTE = 0.42;
 const ACCUM_BYTES_PER_PIXEL = 16;
 export interface PostSettings {
   /** Scene-referred gain ahead of the tonemap. */
@@ -20,15 +22,22 @@ export interface PostSettings {
   breath: number;
 }
 
-export const DEFAULT_POST: PostSettings = {
-  exposure: 3.5,
-  trail: 0.85,
-  bloom: 1.1,
-  grain: 0.011,
-  vignette: 0.42,
-  ca: 0.0045,
-  breath: 1,
-};
+/** Per-frame finish settings for a variant. The engine adds breath and dimming on top. */
+export function settingsFor(v: Variant): PostSettings {
+  const r = v.render;
+  return {
+    exposure: r.exposure,
+    trail: r.trail,
+    bloom: r.bloom,
+    grain: r.grain,
+    vignette: VIGNETTE,
+    ca: r.aberration,
+    breath: 1,
+  };
+}
+
+const srgbToLinear = (c: number): number =>
+  c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 
 interface Level {
   tex: GPUTexture;
@@ -46,6 +55,7 @@ export class Post {
   private readonly downPipe: GPURenderPipeline;
   private readonly upPipe: GPURenderPipeline;
   private readonly compositePipe: GPURenderPipeline;
+  private readonly background: number[];
 
   private accumBuf: GPUBuffer | null = null;
   private hdr: Level[] = [];
@@ -59,8 +69,9 @@ export class Post {
   private width = 0;
   private height = 0;
 
-  constructor(gpu: Gpu) {
+  constructor(gpu: Gpu, variant: Variant) {
     this.gpu = gpu;
+    this.background = variant.render.background.map(srgbToLinear);
     const device = (this.device = gpu.device);
     this.params = createUniform(device, UNIFORM_FLOATS * 4, 'post params');
     this.sampler = device.createSampler({
@@ -69,7 +80,7 @@ export class Post {
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',
     });
-    const module = createShader(device, postWgsl, 'post');
+    const module = createShader(device, postWgsl + variant.gradeWgsl, `post/${variant.id}`);
     const make = (
       label: string,
       fragment: string,
@@ -205,6 +216,7 @@ export class Post {
     d.set([s.exposure, s.trail, s.bloom, s.grain], 4);
     d.set([s.vignette, s.ca, this.gpu.hdrHeadroom, time % 1000], 8);
     d.set([(this.width * this.height) / Math.max(1, particleCount), s.breath, 0, 0], 12);
+    d.set([...this.background, 0], 16);
     this.device.queue.writeBuffer(this.params, 0, d);
 
     const cur = this.flip;

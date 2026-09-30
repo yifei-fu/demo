@@ -78,6 +78,10 @@ export class Sensors {
     this.shakePending = true;
     this.onShake?.();
   }
+  /** While the map is open, single touches belong to it; only pinching (to close it) is heard. */
+  setMapOpen(open: boolean): void {
+    this.pointers.suspended = open;
+  }
   setDive(v: number): void {
     this.pointers.setDive(v);
   }

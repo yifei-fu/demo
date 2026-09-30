@@ -1,12 +1,23 @@
 /** Owns the simulation-and-render pipeline; `advance` is one frame, whether from rAF or a test. */
 import { backingSize, type Gpu } from './gpu';
-import { lawParams, LAW_LEN } from './law';
+import type { ParamMap } from './map';
 import { Bead, CameraRig } from './navigator';
 import { Particles, type StirParams } from './particles';
-import { DEFAULT_POST, Post, type PostSettings } from './post';
+import { Post, settingsFor, type PostSettings } from './post';
 import { Sensors } from './sensors';
+import type { Variant } from './variants/types';
+import { LAW_LEN } from './law';
+import type { Core, SpectrumReading } from './wasm';
 
 const STIR_STRENGTH = 1;
+/** World-time units the spectrum probe advances per frame (about 24x real time, so it converges). */
+const SPECTRUM_STEP = 0.4;
+/** Pinch travel (sum of relative finger-distance changes, decaying) that opens / closes the map. */
+const PINCH_OPEN = 0.3;
+const PINCH_CLOSE = -0.25;
+/** The 3D view yields to the open map: dimmer and a little further away. */
+const MAP_DIM = 0.78;
+const MAP_RECEDE = 0.12;
 
 export class Engine {
   readonly sensors: Sensors;
@@ -15,7 +26,10 @@ export class Engine {
   readonly particles: Particles;
   readonly post: Post;
   readonly law = new Float32Array(LAW_LEN);
-  readonly settings: PostSettings = { ...DEFAULT_POST };
+  readonly settings: PostSettings;
+  spectrum: SpectrumReading;
+  /** 0..1 touch-drag energy, for the sound of stirring. */
+  stirLevel = 0;
 
   scale = 1;
   time = 0;
@@ -25,20 +39,35 @@ export class Engine {
   /** After Begin: the autopilot may start and the opening breath calms down. */
   begun = false;
 
+  private map: ParamMap | null = null;
+  private mapAmount = 0;
+  private pinchAcc = 0;
   private stirGain = 0;
   private hookStir: { x: number; y: number; strength: number; left: number } | null = null;
   private sinceReset = 0;
 
   constructor(
     readonly gpu: Gpu,
+    readonly core: Core,
+    readonly variant: Variant,
     readonly seed: number,
     particleCount: number,
   ) {
     this.sensors = new Sensors(gpu.canvas);
-    this.particles = new Particles(gpu, particleCount, seed);
-    this.post = new Post(gpu);
+    this.particles = new Particles(gpu, particleCount, seed, variant);
+    this.post = new Post(gpu, variant);
+    this.settings = settingsFor(variant);
     this.sensors.onShake = () => this.particles.shake();
+    this.updateLaw();
+    this.spectrum = core.spectrumRead();
     this.resize(true);
+  }
+
+  /** The map is optional; once attached the engine drives it and yields to it. */
+  attachMap(map: ParamMap): void {
+    this.map = map;
+    map.onPick = (u, v) => this.setBead(u, v);
+    map.onToggle = () => this.syncMap();
   }
 
   /** Re-fit the backing store to the CSS size and adaptive scale. */
@@ -66,7 +95,7 @@ export class Engine {
 
   setBead(u: number, v: number): void {
     this.bead.set(u, v);
-    lawParams(this.bead.u, this.bead.v, this.seed, this.law);
+    this.updateLaw();
   }
 
   /** Inject a synthetic stir for a short while (test hook). x, y in NDC. */
@@ -85,10 +114,13 @@ export class Engine {
   /** One frame: sense, navigate, simulate and (optionally) draw. Submits its own command buffer. */
   advance(dt: number, render = true): void {
     const input = this.sensors.update(dt, performance.now());
+    this.driveMap(input.pinch, input.map, dt);
     this.bead.update(input, dt, this.begun);
-    lawParams(this.bead.u, this.bead.v, this.seed, this.law);
+    this.updateLaw();
+    this.core.spectrumStep(this.law, SPECTRUM_STEP);
+    this.spectrum = this.core.spectrumRead();
     this.particles.setLaw(this.law);
-    const cam = this.rig.update(input, dt);
+    const cam = this.rig.update(input, dt, this.mapAmount * MAP_RECEDE);
 
     const stir = this.stirParams(input.stir, dt);
     this.time += dt;
@@ -112,14 +144,19 @@ export class Engine {
       const s = this.settings;
       const still = 1 - Math.min(0.7, cam.motion * 0.35);
       const breathAmp = this.begun ? 0.015 : 0.05;
-      const trail = Math.min(s.trail * still, n / (n + 1));
+      const breath = 1 + breathAmp * Math.sin((this.time * Math.PI * 2) / 6.5);
       this.post.encode(
         enc,
         this.gpu.context.getCurrentTexture().createView(),
-        { ...s, trail, breath: 1 + breathAmp * Math.sin((this.time * Math.PI * 2) / 6.5) },
+        {
+          ...s,
+          trail: Math.min(s.trail * still, n / (n + 1)),
+          breath: breath * (1 - MAP_DIM * this.mapAmount),
+        },
         this.particles.active,
         this.time,
       );
+      this.map?.frame(enc, [this.bead.u, this.bead.v], this.time);
     } else {
       this.sinceReset = 0;
     }
@@ -128,6 +165,28 @@ export class Engine {
 
   settled(): Promise<void> {
     return this.gpu.device.queue.onSubmittedWorkDone();
+  }
+
+  private updateLaw(): void {
+    this.core.lawParams(this.bead.u, this.bead.v, this.seed, this.law);
+  }
+
+  /** Pinch-out / pinch-in / M open and close the map; the 3D view eases away while it is open. */
+  private driveMap(pinch: number, keyPressed: boolean, dt: number): void {
+    const map = this.map;
+    if (!map) return;
+    this.pinchAcc = this.pinchAcc * Math.exp(-dt / 0.5) + pinch;
+    const open = map.open;
+    if (keyPressed) map.setOpen(!open);
+    else if (!open && this.pinchAcc > PINCH_OPEN) map.setOpen(true);
+    else if (open && this.pinchAcc < PINCH_CLOSE) map.setOpen(false);
+    if (map.open !== open) this.pinchAcc = 0;
+    this.syncMap();
+    this.mapAmount += ((map.open ? 1 : 0) - this.mapAmount) * (1 - Math.exp(-dt / 0.35));
+  }
+
+  private syncMap(): void {
+    this.sensors.setMapOpen(this.map?.open ?? false);
   }
 
   private stirParams(
@@ -151,6 +210,7 @@ export class Engine {
     const target = active ? 1 : 0;
     this.stirGain += (target - this.stirGain) * (1 - Math.exp(-dt / (active ? 0.08 : 0.25)));
     if (this.stirGain < 0.002) this.stirGain = 0;
+    this.stirLevel = Math.min(1, this.stirGain * strength * (0.45 + 0.35 * Math.hypot(vx, vy)));
     return { active: this.stirGain > 0, x, y, vx, vy, strength: strength * this.stirGain };
   }
 }

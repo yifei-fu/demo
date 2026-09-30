@@ -1,0 +1,228 @@
+/* The lens and its full-screen map. Everything lives under .map-host (see style.css). */
+.axm-map {
+  --axm-lens: 76px;
+  --axm-lens-bottom: calc(var(--sab, 0px) + 74px);
+  --axm-open: min(90vw, 90dvh);
+  --axm-bead: 5px;
+  --axm-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.axm-map.is-open {
+  --axm-bead: 11px;
+}
+
+.axm-scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(3, 4, 8, 0.42) 0,
+    rgba(3, 4, 8, 0.72) 70%,
+    rgba(3, 4, 8, 0.86) 100%
+  );
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 0.6s var(--axm-ease);
+}
+.axm-map.is-open .axm-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The disk box: lens size when closed, centred and large when open. Its open/close motion is a
+   transform animation started from script, so the layout switch itself never shows. */
+.axm-disk {
+  position: absolute;
+  left: 50%;
+  bottom: var(--axm-lens-bottom);
+  width: var(--axm-lens);
+  height: var(--axm-lens);
+  margin-left: calc(var(--axm-lens) / -2);
+  border-radius: 50%;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
+  outline: none;
+  transform-origin: 50% 50%;
+}
+.axm-map.is-open .axm-disk {
+  bottom: auto;
+  top: 50%;
+  width: var(--axm-open);
+  height: var(--axm-open);
+  margin: calc(var(--axm-open) / -2) 0 0 calc(var(--axm-open) / -2);
+  cursor: crosshair;
+}
+.axm-disk:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid rgba(230, 236, 255, 0.7);
+}
+
+/* a breath of light around the disk, only when it is the whole screen */
+.axm-disk::before {
+  content: '';
+  position: absolute;
+  inset: -16%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--axm-accent, #9db8ff) 20%, transparent) 40%,
+    transparent 68%
+  );
+  opacity: 0;
+  transition: opacity 0.6s var(--axm-ease);
+  pointer-events: none;
+}
+.axm-map.is-open .axm-disk::before {
+  opacity: 0.55;
+}
+
+.axm-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+}
+
+/* The bead is a zero-size anchor moved by script; its dot and halo hang off it. */
+.axm-bead {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+.axm-bead::before,
+.axm-bead::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--axm-bead);
+  height: var(--axm-bead);
+  margin: calc(var(--axm-bead) / -2) 0 0 calc(var(--axm-bead) / -2);
+  border-radius: 50%;
+}
+.axm-bead::before {
+  background: #fff;
+  box-shadow:
+    0 0 5px 1px rgba(255, 255, 255, 0.85),
+    0 0 14px 3px color-mix(in srgb, var(--axm-accent, #9db8ff) 70%, transparent);
+}
+.axm-bead::after {
+  border: 1px solid color-mix(in srgb, var(--axm-accent, #9db8ff) 80%, #fff);
+  animation: axm-pulse 3.6s ease-out infinite;
+}
+@keyframes axm-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  70%,
+  100% {
+    transform: scale(3.4);
+    opacity: 0;
+  }
+}
+
+/* legend and close, only when open */
+.axm-legend {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--sab, 0px) + 22px);
+  text-align: center;
+  font: 400 9.5px/1 var(--mono, ui-monospace, monospace);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint, rgba(190, 200, 240, 0.4));
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.axm-legend i {
+  font-style: normal;
+  margin: 0 0.5em;
+  color: var(--c);
+}
+.axm-legend .sep {
+  opacity: 0.5;
+}
+.axm-map.is-open .axm-legend {
+  opacity: 1;
+  transition-delay: 0.25s;
+}
+
+.axm-close {
+  position: absolute;
+  top: calc(var(--sat, 0px) + 10px);
+  left: calc(var(--sal, 0px) + 10px);
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--dim, rgba(200, 210, 245, 0.5));
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.5s ease,
+    color 0.25s ease;
+}
+.axm-close svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.axm-close:hover {
+  color: var(--text, #e2e8ff);
+}
+.axm-close:focus-visible {
+  outline: 1px solid rgba(230, 236, 255, 0.7);
+  outline-offset: -6px;
+  border-radius: 50%;
+}
+.axm-map.is-open .axm-close {
+  opacity: 1;
+  pointer-events: auto;
+  transition-delay: 0.25s;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .axm-legend {
+    left: calc(var(--sal, 0px) + 18px);
+    right: auto;
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axm-bead::after {
+    animation: none;
+    opacity: 0;
+  }
+  .axm-scrim,
+  .axm-disk::before,
+  .axm-legend,
+  .axm-close {
+    transition-duration: 0.01s;
+    transition-delay: 0s;
+  }
+}

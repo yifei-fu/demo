@@ -55,7 +55,6 @@ export function installHooks(variant: string): AxiomHooks {
 export function bindHooks(
   hooks: AxiomHooks,
   engine: Engine,
-  variant: string,
   fps: () => number,
   afterStep: () => void,
 ): void {
@@ -74,8 +73,8 @@ export function bindHooks(
     scale: engine.scale,
     particles: engine.particles.active,
     bead: [engine.bead.u, engine.bead.v],
-    regime: null,
-    dky: null,
-    variant,
+    regime: engine.spectrum.regime,
+    dky: engine.spectrum.dky,
+    variant: engine.variant.id,
   });
 }

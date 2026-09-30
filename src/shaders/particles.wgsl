@@ -1,6 +1,6 @@
 // One fused kernel per frame: integrate (RK2, 2 substeps), stir/shake forces, respawn, then
 // project and splat into the fixed-point accumulation buffer with stochastic depth of field.
-// (law.wgsl and shade.wgsl are concatenated in front of this file.)
+// (law.wgsl and the variant's shade function are concatenated in front of this file.)
 
 struct Frame {
   right: vec4f,   // xyz, focal_x     (ndc.x = cam.x / cam.z * focal_x)
@@ -12,7 +12,7 @@ struct Frame {
   lens: vec4f,    // focus distance, aperture (px), near plane, max CoC (px)
   stir: vec4f,    // touch ndc x, y, strength, unused
   stirv: vec4f,   // touch ndc velocity x, y, shake energy, shake id
-  tint: vec4f,    // palette shift, unused...
+  misc: vec4f,    // seed as a fraction in [0,1), RK2 substeps, unused...
   ids: vec4u,     // frame, count, seed, flags (bit 0: initialise, bit 1: splat)
 }
 
@@ -24,7 +24,7 @@ struct Frame {
 const FIXED: f32 = 256.0;
 const TAU: f32 = 6.2831853;
 const SPAWN_RADIUS: f32 = 1.2;
-const ESCAPE_R2: f32 = 9.0;
+const ESCAPE_R2: f32 = 2.56;             // respawn beyond |x| = 1.6
 const TRICKLE_PER_SECOND: f32 = 0.12;   // 0.2 % per frame at 60 fps
 const TRACER_FRACTION: f32 = 0.004;  // a few particles burn much brighter and draw visible streams
 const TRACER_WEIGHT: f32 = 22.0;
@@ -100,10 +100,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 
   let p_before = p;
 
-  // RK2 midpoint, two substeps of dt/2
-  let h = 0.5 * dt;
+  // RK2 midpoint; the host picks enough substeps to keep each at or under 0.03 world time
+  let steps = i32(F.misc.y);
+  let h = dt / f32(steps);
   var speed = 0.0;
-  for (var s = 0; s < 2; s++) {
+  for (var s = 0; s < steps; s++) {
     let k1 = f_world_of(law, p) + stir_velocity(p) + extra;
     if (s == 0) { speed = length(k1); }
     let pm = p + 0.5 * h * k1;
@@ -136,8 +137,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   if (px.x < 0.0 || px.y < 0.0 || px.x >= res.x || px.y >= res.y) { return; }
 
   let base = (u32(px.y) * u32(res.x) + u32(px.x)) * 4u;
-  let wgt = select(1.0, TRACER_WEIGHT, phase < TRACER_FRACTION);
-  let col = max(shade(speed, phase, cz - F.lens.x), vec3f(0.0)) * (wgt * FIXED);
+  let tracer = u01(hash3(i, 0x5bd1e995u, seed)) < TRACER_FRACTION;
+  let wgt = select(1.0, TRACER_WEIGHT, tracer);
+  let col = max(shade(speed, phase, cz - F.lens.x, F.misc.x), vec3f(0.0)) * (wgt * FIXED);
   atomicAdd(&accum[base], u32(col.r));
   atomicAdd(&accum[base + 1u], u32(col.g));
   atomicAdd(&accum[base + 2u], u32(col.b));

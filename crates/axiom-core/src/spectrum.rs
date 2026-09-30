@@ -236,9 +236,23 @@ pub fn regime(l: [f64; 3], d: f64) -> u8 {
     }
 }
 
+/// Dimension and regime of a tracer given its exponents and whether it is at
+/// rest. A fixed point needs *both* a contracting spectrum and a tracer that
+/// has actually stopped: a moving tracer whose finite-time λ1 is slightly
+/// below −ε is a limit cycle seen through a biased window, so its λ1 is
+/// floored at the cycle band instead.
+pub fn classify(l: [f64; 3], at_rest: bool) -> (f64, u8) {
+    if at_rest {
+        return (0.0, FIXED);
+    }
+    let l = [l[0].max(-EPS), l[1], l[2]];
+    let d = kaplan_yorke(l);
+    (d, regime(l, d))
+}
+
 /// A tracer that has been this slow (world units per unit time) for a while is
 /// sitting on a fixed point, whatever the averaged exponents still remember.
-const REST_SPEED: f64 = 0.01;
+pub const REST_SPEED: f64 = 0.01;
 /// Time constant of the tracer-speed average.
 const SPEED_MEMORY: f64 = 2.0;
 
@@ -287,12 +301,7 @@ impl Spectrum {
     pub fn read(&self) -> [f32; 8] {
         let l = self.bet.exponents();
         let slow = self.bet.exponents_slow();
-        let (d, code) = if self.speed < REST_SPEED {
-            (0.0, FIXED)
-        } else {
-            let d = kaplan_yorke(slow);
-            (d, regime(slow, d))
-        };
+        let (d, code) = classify(slow, self.speed < REST_SPEED);
         let x = self.bet.x;
         [
             l[0] as f32,

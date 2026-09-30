@@ -21,7 +21,14 @@ interface Touch {
   sy: number;
   t0: number;
   moved: boolean;
+  /** Started on the map, or while it is open: takes part in pinching but never dives or stirs. */
+  passive: boolean;
 }
+
+const overMap = (t: EventTarget | null): boolean =>
+  t instanceof Element && t.closest('.map-host') !== null;
+const overControl = (t: EventTarget | null): boolean =>
+  t instanceof Element && t.closest('button, a') !== null;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
@@ -31,6 +38,8 @@ export class Pointers {
   /** Mouse hover offset in [-1, 1], for desktop parallax. */
   readonly hover: [number, number] = [0, 0];
   onShake: (() => void) | null = null;
+  /** While the map is open every touch is passive, so only pinching (to close it) is heard. */
+  suspended = false;
 
   private readonly touches = new Map<number, Touch>();
   private readonly keys = new Set<string>();
@@ -40,6 +49,7 @@ export class Pointers {
   private pinch = 0;
   private pinchDist = 0;
   private pulse = false;
+  private mapKey = false;
   private mouseDrag = false;
   private stirV: [number, number] = [0, 0];
   private stirPos: [number, number] = [0, 0];
@@ -48,12 +58,13 @@ export class Pointers {
   enabled = false;
 
   constructor(private readonly el: HTMLElement) {
-    el.addEventListener('pointerdown', this.down);
-    el.addEventListener('pointermove', this.move);
-    el.addEventListener('pointerup', this.up);
-    el.addEventListener('pointercancel', this.up);
-    el.addEventListener('wheel', this.wheel, { passive: false });
-    el.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Listen on the document so a pinch that lands on the map still reaches us.
+    document.addEventListener('pointerdown', this.down);
+    document.addEventListener('pointermove', this.move);
+    document.addEventListener('pointerup', this.up);
+    document.addEventListener('pointercancel', this.up);
+    document.addEventListener('wheel', this.wheel, { passive: false });
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('keydown', this.keyDown);
     window.addEventListener('keyup', this.keyUp);
     window.addEventListener('blur', () => this.keys.clear());
@@ -64,7 +75,8 @@ export class Pointers {
 
   /** Fold accumulated pointer state into `input`; marks `input.active` on any human input. */
   apply(input: Input, now: number): void {
-    const single = this.touches.size === 1 ? this.touches.values().next().value : undefined;
+    const only = this.touches.size === 1 ? this.touches.values().next().value : undefined;
+    const single = only && !only.passive ? only : undefined;
     input.hold = !!single && !single.moved && now - single.t0 > HOLD_MS;
     const dragging = !!single?.moved;
     input.stir.active = dragging;
@@ -95,6 +107,9 @@ export class Pointers {
     this.joystick[1] = jy;
     if (this.pulse || input.hold || dragging || this.touches.size > 1 || jx !== 0 || jy !== 0)
       input.active = true;
+    input.map = this.mapKey;
+    if (this.mapKey) input.active = true;
+    this.mapKey = false;
     this.pulse = false;
   }
 
@@ -113,13 +128,15 @@ export class Pointers {
   }
 
   private down = (e: PointerEvent): void => {
-    if (!this.enabled) return;
-    this.pulse = true;
-    this.el.setPointerCapture(e.pointerId);
+    if (!this.enabled || overControl(e.target)) return;
+    const passive = this.suspended || overMap(e.target);
     if (e.pointerType === 'mouse') {
-      this.mouseDrag = e.button === 0;
+      this.mouseDrag = e.button === 0 && !passive;
+      this.pulse = true;
       return;
     }
+    this.pulse = true;
+    (e.target as Element).setPointerCapture?.(e.pointerId);
     this.touches.set(e.pointerId, {
       x: e.clientX,
       y: e.clientY,
@@ -127,6 +144,7 @@ export class Pointers {
       sy: e.clientY,
       t0: performance.now(),
       moved: false,
+      passive,
     });
     this.stirPos = this.ndc(e);
     this.stirV = [0, 0];
@@ -136,9 +154,8 @@ export class Pointers {
 
   private move = (e: PointerEvent): void => {
     if (e.pointerType === 'mouse') {
-      const r = this.el.getBoundingClientRect();
-      this.hover[0] = clamp(((e.clientX - r.left) / r.width) * 2 - 1, -1, 1);
-      this.hover[1] = clamp(1 - ((e.clientY - r.top) / r.height) * 2, -1, 1);
+      this.hover[0] = clamp((e.clientX / innerWidth) * 2 - 1, -1, 1);
+      this.hover[1] = clamp(1 - (e.clientY / innerHeight) * 2, -1, 1);
       if (this.enabled && this.mouseDrag && e.buttons & 1) {
         this.pulse = true;
         this.orbitYaw -= e.movementX * 0.006;
@@ -157,6 +174,7 @@ export class Pointers {
       this.pinchDist = d;
       return;
     }
+    if (t.passive) return;
     const now = performance.now();
     const p = this.ndc(e);
     const dt = Math.max(0.004, (now - this.stirLast) / 1000);
@@ -179,7 +197,8 @@ export class Pointers {
     this.pulse = true;
     if (e.ctrlKey)
       this.pinch += -e.deltaY * 0.01; // trackpad pinch
-    else this.dive = clamp(this.dive + e.deltaY * -0.0012, 0, 1);
+    else if (!this.suspended && !overMap(e.target))
+      this.dive = clamp(this.dive + e.deltaY * -0.0012, 0, 1);
   };
 
   private keyDown = (e: KeyboardEvent): void => {
@@ -187,6 +206,8 @@ export class Pointers {
     if (e.code in KEY_TILT) {
       this.keys.add(e.code);
       e.preventDefault();
+    } else if (e.code === 'KeyM') {
+      if (!e.repeat) this.mapKey = true;
     } else if (e.code === 'Space') {
       e.preventDefault();
       if (!e.repeat) {

@@ -5,6 +5,7 @@ struct Post {
   a: vec4f,     // exposure, trail, bloom, grain
   b: vec4f,     // vignette, chromatic aberration, hdr headroom, time
   c: vec4f,     // pixels per particle, breath
+  bg: vec4f,    // background, linear
 }
 
 // How splatted density becomes light. Wisps come from a compressive log term, filaments and
@@ -145,9 +146,6 @@ fn fs_up(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 @group(0) @binding(3) var csamp: sampler;
 
 override HDR_OUT: bool = false;
-const PRE_SAT: f32 = 1.6;
-const POST_SAT: f32 = 1.12;
-const BG: vec3f = vec3f(0.0015, 0.0018, 0.0030);  // #05060a in linear light
 
 // AgX (Troy Sobotka), minimal implementation with the polynomial sigmoid.
 const AGX_IN = mat3x3f(
@@ -208,11 +206,8 @@ fn fs_composite(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let vig = 1.0 - P.b.x * smoothstep(0.25, 1.05, r2);
   var lin = (c * P.a.x * P.c.y + bloom * P.a.z) * vig;
 
-  // AgX's input matrix desaturates by design; push chroma out first so the palette survives it
-  let y = dot(lin, vec3f(0.2126, 0.7152, 0.0722));
-  lin = max(mix(vec3f(y), lin, PRE_SAT), vec3f(0.0));
-  var enc = agx(lin + BG);
-  enc = max(mix(vec3f(dot(enc, vec3f(0.2126, 0.7152, 0.0722))), enc, POST_SAT), vec3f(0.0));
+  lin = grade(lin, uv, P.b.w);  // the variant's finish (its own file), still scene-referred
+  var enc = agx(lin + P.bg.rgb);
 
   // fine animated grain, weighted away from the deepest blacks; also dithers the dark gradients
   let n = hash12(pos.xy, P.b.w) + hash12(pos.xy + 17.0, P.b.w + 3.7) - 1.0;

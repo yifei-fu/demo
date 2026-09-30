@@ -157,7 +157,8 @@ export class CameraRig {
     this.diveVel = 0;
   }
 
-  update(input: Input, dt: number): CameraState {
+  /** `recede` (0..1 of a fraction) pulls the camera back, e.g. while the map is open. */
+  update(input: Input, dt: number, recede = 0): CameraState {
     this.time += dt;
     const target = Math.max(input.dive, input.hold ? 1 : 0);
     // stiffer going in than coming out: diving is intent, drifting back is release
@@ -168,7 +169,7 @@ export class CameraRig {
     if (this.dive === 0 || this.dive === 1) this.diveVel = 0;
 
     const ease = smoothstep(this.dive);
-    const dist = DIST_FAR * Math.pow(DIST_NEAR / DIST_FAR, ease);
+    const dist = DIST_FAR * Math.pow(DIST_NEAR / DIST_FAR, ease) * (1 + recede);
 
     const drift = 0.012 * this.time + 0.18 * Math.sin(this.time * 0.05);
     const az = input.yaw + input.orbitYaw + drift;

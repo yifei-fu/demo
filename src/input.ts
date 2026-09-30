@@ -28,6 +28,8 @@ export interface Input {
   pinch: number;
   /** True for the frame in which a shake impulse fired. */
   shake: boolean;
+  /** True for the frame in which the map key was pressed. */
+  map: boolean;
   /** True on any frame with real human input; cancels the idle autopilot. */
   active: boolean;
 }
@@ -44,6 +46,7 @@ export function createInput(): Input {
     stir: { active: false, x: 0, y: 0, vx: 0, vy: 0 },
     pinch: 0,
     shake: false,
+    map: false,
     active: false,
   };
 }

@@ -3,6 +3,7 @@
   --text: rgba(226, 232, 255, 0.92);
   --dim: rgba(200, 210, 245, 0.5);
   --faint: rgba(190, 200, 240, 0.3);
+  --accent: #9db8ff;
   --sans: -apple-system, 'SF Pro Display', Inter, system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
   --sat: env(safe-area-inset-top, 0px);
@@ -128,7 +129,7 @@ body {
 .begin {
   appearance: none;
   border: 1px solid rgba(214, 224, 255, 0.34);
-  background: rgba(150, 175, 255, 0.05);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--text);
   font: 400 11px/1 var(--sans);
   letter-spacing: 0.5em;
@@ -141,8 +142,8 @@ body {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   box-shadow:
-    0 0 34px rgba(120, 150, 255, 0.14),
-    inset 0 0 18px rgba(160, 185, 255, 0.06);
+    0 0 34px color-mix(in srgb, var(--accent) 16%, transparent),
+    inset 0 0 18px color-mix(in srgb, var(--accent) 7%, transparent);
   transition:
     transform 0.25s ease,
     border-color 0.25s ease,
@@ -151,7 +152,7 @@ body {
 }
 .begin:hover {
   border-color: rgba(230, 236, 255, 0.6);
-  background: rgba(150, 175, 255, 0.1);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .begin:active {
   transform: scale(0.97);
@@ -160,11 +161,37 @@ body {
   outline: 1px solid rgba(230, 236, 255, 0.8);
   outline-offset: 4px;
 }
+/* the quiet row of variants under Begin */
+.variants {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+  margin-top: 26px;
+}
+.variant {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 6px 2px;
+  font: 400 9px/1 var(--sans);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: pointer;
+  transition: color 0.25s ease;
+}
+.variant:hover {
+  color: var(--dim);
+}
+.variant.on {
+  color: var(--accent);
+  cursor: default;
+}
 @keyframes pulse {
   50% {
     box-shadow:
-      0 0 52px rgba(120, 150, 255, 0.28),
-      inset 0 0 22px rgba(160, 185, 255, 0.1);
+      0 0 52px color-mix(in srgb, var(--accent) 30%, transparent),
+      inset 0 0 22px color-mix(in srgb, var(--accent) 12%, transparent);
   }
 }
 
@@ -189,12 +216,30 @@ body {
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
-.readout .meta {
-  margin-top: 7px;
+.readout .mix {
+  margin-top: 5px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+.readout .state {
+  margin-top: 8px;
   font-size: 9px;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.map-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 2s ease 0.6s;
+}
+.begun .map-host {
+  opacity: 1;
 }
 
 .mute {

@@ -177,6 +177,8 @@ struct Row {
     /// Characteristic frequency in system time.
     omega: f64,
     r99: f64,
+    /// Mean |F| along the attractor in system time.
+    speed_sys: f64,
     regime: u8,
     d: f64,
     lam_w: [f64; 3],
@@ -230,6 +232,7 @@ fn init_rows(spec: &Spec) -> Vec<Row> {
             l: spec.l_min,
             omega: 1.0,
             r99: 0.0,
+            speed_sys: 0.0,
             regime: 0,
             d: 0.0,
             lam_w: [0.0; 3],
@@ -242,7 +245,7 @@ fn init_rows(spec: &Spec) -> Vec<Row> {
 fn solve_route(spec: &Spec) -> Vec<Row> {
     let mut rows = init_rows(spec);
     let sim = sim_for(spec.kind);
-    for _pass in 0..3 {
+    for _pass in 0..4 {
         let measured = par_map(&rows, |_, row| {
             let sys = Damped {
                 anchor: Anchor {
@@ -286,6 +289,11 @@ fn solve_route(spec: &Spec) -> Vec<Row> {
             } else {
                 radius_q(&m.pts, row.c, 0.99)
             };
+            row.speed_sys = if fixed {
+                0.0
+            } else {
+                m.vel.iter().map(|v| norm(*v)).sum::<f64>() / m.vel.len() as f64
+            };
             row.omega = if fixed {
                 let end = m.pts.last().copied().unwrap_or(row.x0);
                 let a = Anchor {
@@ -318,33 +326,47 @@ fn solve_route(spec: &Spec) -> Vec<Row> {
                 rows[i].omega = w[1];
             }
         }
-        for row in rows.iter_mut() {
-            row.tau = if row.omega > 0.05 {
-                (OMEGA_WORLD / row.omega).min(spec.tau_cap)
-            } else {
-                spec.tau_cap
-            };
-        }
-        // Fixed-point rows carry no reliable frequency (a node has none): ramp τ
-        // linearly from its r = 0 value to that of the first oscillating row.
-        if let Some(h) = rows.iter().position(|r| r.regime != 0) {
-            let (r0, rh, t0, th) = (rows[0].r, rows[h].r, rows[0].tau, rows[h].tau);
-            for row in rows.iter_mut().take(h).skip(1) {
-                row.tau = t0 + (th - t0) * (row.r - r0) / (rh - r0);
-            }
-        }
+        // L: the 99 % radius should fill `r99` of the ball (a bigger target
+        // for the rim lets the wall clip the labyrinth to "volume-filling").
+        let target = |r: f64| {
+            let t = ((r - 0.6) / 0.4).clamp(0.0, 1.0);
+            spec.r99 + (spec.r99_rim - spec.r99) * t * t * (3.0 - 2.0 * t)
+        };
         let want: Vec<f64> = rows
             .iter()
-            .map(|r| (r.r99 / spec.r99).max(spec.l_min))
+            .map(|r| (r.r99 / target(r.r)).max(spec.l_min))
             .collect();
         for i in 0..rows.len() {
             let (a, b) = (want[i.saturating_sub(1)], want[(i + 1).min(rows.len() - 1)]);
             rows[i].l = 0.25 * a + 0.5 * want[i] + 0.25 * b;
         }
+        // τ: ω_world = 1.5, unless that leaves the particles too slow.
+        for row in rows.iter_mut() {
+            let tau = if row.omega > 0.05 {
+                (OMEGA_WORLD / row.omega).min(spec.tau_cap)
+            } else {
+                spec.tau_cap
+            };
+            let speed = tau * row.speed_sys / row.l;
+            row.tau = if row.speed_sys > 0.0 && speed < spec.min_speed {
+                (tau * spec.min_speed / speed).min(spec.tau_cap)
+            } else {
+                tau
+            };
+        }
+        // Fixed-point rows carry no reliable frequency (a node has none): ramp τ
+        // and L linearly from their r = 0 value to that of the first
+        // oscillating row (L starts small so the unit ball stays inside the
+        // fixed point's basin).
         if let Some(h) = rows.iter().position(|r| r.regime != 0) {
-            let (r0, rh, lh) = (rows[0].r, rows[h].r, rows[h].l);
+            let (r0, rh) = (rows[0].r, rows[h].r);
+            let (t0, th, lh) = (rows[0].tau, rows[h].tau, rows[h].l);
             for row in rows.iter_mut().take(h) {
-                row.l = spec.l_start + (lh - spec.l_start) * (row.r - r0) / (rh - r0);
+                let t = (row.r - r0) / (rh - r0);
+                if row.r > r0 {
+                    row.tau = t0 + (th - t0) * t;
+                }
+                row.l = spec.l_start + (lh - spec.l_start) * t;
             }
         }
     }

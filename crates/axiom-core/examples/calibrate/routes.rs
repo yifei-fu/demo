@@ -32,8 +32,14 @@ pub struct Spec {
     pub l_start: f64,
     /// Largest allowed τ (keeps stiff fixed points integrable).
     pub tau_cap: f64,
-    /// World radius that 99 % of a grown attractor should fit in.
+    /// World radius that 99 % of a grown attractor should fit in, at r = 0.6
+    /// and at the rim (linear in between; the wall clips anything beyond R_c).
     pub r99: f64,
+    pub r99_rim: f64,
+    /// Particles on a grown attractor should move at least this fast (world
+    /// units per second). Where the attractor is slow, τ is raised above the
+    /// ω = 1.5 normalisation and the `omega` column says so.
+    pub min_speed: f64,
     pub centre: Centre,
 }
 
@@ -58,6 +64,13 @@ pub fn all() -> Vec<Spec> {
                 (0.54, &[0.16]),
                 (0.60, &[0.12]),
                 (0.66, &[0.09]),
+                (0.72, &[0.055]),
+                (0.78, &[0.028]),
+                (0.84, &[0.016]),
+                (0.92, &[0.011]),
+                (1.00, &[0.008]),
+            ]),
+                (0.66, &[0.09]),
                 (0.72, &[0.07]),
                 (0.79, &[0.05]),
                 (0.86, &[0.036]),
@@ -68,6 +81,8 @@ pub fn all() -> Vec<Spec> {
             l_start: 5.0,
             tau_cap: 7.0,
             r99: 0.8,
+            r99_rim: 1.3,
+            min_speed: 0.45,
             centre: Centre::Zero,
         },
         Spec {
@@ -93,6 +108,8 @@ pub fn all() -> Vec<Spec> {
             l_start: 1.7,
             tau_cap: 4.0,
             r99: 0.8,
+            r99_rim: 0.8,
+            min_speed: 0.45,
             centre: Centre::Eq,
         },
         Spec {
@@ -117,6 +134,8 @@ pub fn all() -> Vec<Spec> {
             l_start: 20.0,
             tau_cap: 0.6,
             r99: 0.8,
+            r99_rim: 0.8,
+            min_speed: 0.45,
             centre: Centre::LorenzAxis,
         },
         Spec {
@@ -142,6 +161,8 @@ pub fn all() -> Vec<Spec> {
             l_start: 8.0,
             tau_cap: 2.0,
             r99: 1.0,
+            r99_rim: 1.0,
+            min_speed: 0.45,
             centre: Centre::Eq,
         },
     ]

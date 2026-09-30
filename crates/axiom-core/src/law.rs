@@ -13,8 +13,17 @@ pub const ANCHOR_COUNT: usize = ANCHORS.len();
 /// Confinement stiffness K and default radius R_c (§3.2).
 pub const K_CONFINE: f64 = 8.0;
 pub const CONFINE_RADIUS: f64 = 1.2;
+/// Cyclic order of the anchors around the rim, up to rotation and reflection
+/// (both seeded). Neighbours are blended, and how well two anchors blend
+/// differs enormously: Thomas–Aizawa, Thomas–Lorenz and Thomas–Rössler keep
+/// their motion, Aizawa–Rössler often settles to a point and Lorenz–Rössler
+/// nearly always does (Rössler's field is ~6× larger than Lorenz's over the
+/// unit ball, so a 10 % share already decides). Of the three cyclic orders this
+/// one keeps Lorenz and Rössler apart and puts Aizawa–Rössler, the next worst
+/// pair, as the only bad neighbours.
+pub const RIM_ORDER: [usize; ANCHOR_COUNT] = [0, 2, 1, 3];
 /// Fraction of the arc between two neighbouring anchors over which they mix.
-pub const BLEND_WIDTH: f64 = 0.4;
+pub const BLEND_WIDTH: f64 = 0.25;
 
 /// One active anchor in world space: `x_sys = c + L · R · x`.
 #[derive(Clone, Copy, Debug)]
@@ -169,9 +178,11 @@ impl Placement {
     pub fn new(seed: u32) -> Placement {
         let mut rng = Rng::new(seed, 1);
         let theta0 = rng.range(0.0, TAU);
-        let mut order = ANCHORS;
-        for i in (1..ANCHOR_COUNT).rev() {
-            order.swap(i, rng.below(i + 1));
+        // Seeded rotation and direction of the fixed cyclic order.
+        let mut order = RIM_ORDER;
+        order.rotate_left(rng.below(ANCHOR_COUNT));
+        if rng.below(2) == 1 {
+            order.reverse();
         }
         let mut rot = [[[0.0; 3]; 3]; KIND_COUNT];
         for m in rot.iter_mut() {

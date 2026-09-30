@@ -44,7 +44,8 @@ export async function loadCore(seed: number): Promise<Core> {
   const x = instance.exports as unknown as Exports;
 
   const len = x.law_params_len();
-  if (len !== LAW_LEN) throw new Error(`axiom.wasm law block is ${len} floats, engine expects ${LAW_LEN}`);
+  if (len !== LAW_LEN)
+    throw new Error(`axiom.wasm law block is ${len} floats, engine expects ${LAW_LEN}`);
 
   // Scratch blocks live for the page's lifetime. Views are rebuilt on every use because a
   // growing memory detaches the previous ArrayBuffer.

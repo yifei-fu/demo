@@ -1,69 +1,55 @@
-/** Boot: WebGPU check, start gate, frame loop, adaptive quality, URL flags and test hooks. */
+/** Boot: WebGPU + core, start gate, frame loop, adaptive quality, sound, map, test hooks. */
 import './style.css';
 import { Engine } from './engine';
-import { initGpu, watchHdr, type GpuOptions } from './gpu';
+import { parseFlags } from './flags';
+import { initGpu, watchHdr, type Gpu } from './gpu';
 import { bindHooks, installHooks } from './hooks';
 import { Hud, showFallback } from './hud';
-import { fireBegin, fireBeginTap, fireMute } from './lifecycle';
+import { createParamMap } from './map';
 import { enterFullscreen, isPhone, keepAwake } from './platform';
 import { Quality } from './quality';
+import { Sound } from './sound';
+import { pickVariant, VARIANTS } from './variants';
+import { loadCore, type Core } from './wasm';
 
 const PHONE_PARTICLES = 262_144;
 const DESKTOP_PARTICLES = 1_048_576;
-const MAX_PARTICLES = 4_000_000;
 const MAX_IN_FLIGHT = 3;
-
-interface Flags {
-  seed: number;
-  variant: string;
-  n: number | null;
-  debug: boolean;
-  skipintro: boolean;
-  capture: boolean;
-  hdr: GpuOptions['hdr'];
-}
-
-function parseFlags(): Flags {
-  const q = new URLSearchParams(location.search);
-  const seedParam = Number(q.get('seed'));
-  const n = Number(q.get('n'));
-  const hdr = q.get('hdr');
-  return {
-    seed:
-      q.has('seed') && Number.isFinite(seedParam)
-        ? seedParam >>> 0
-        : (Math.random() * 2 ** 32) >>> 0,
-    variant: q.get('v') || 'default',
-    n: n > 0 ? Math.min(MAX_PARTICLES, Math.max(1024, Math.floor(n))) : null,
-    debug: q.has('debug'),
-    skipintro: q.has('skipintro') || q.has('capture'),
-    capture: q.has('capture'),
-    hdr: hdr === '0' || hdr === '1' ? hdr : 'auto',
-  };
-}
+/** Longest frame the simulation will integrate in one go; slower frames run in slow motion. */
+const MAX_FRAME_DT = 1 / 15;
 
 async function boot(): Promise<void> {
   const flags = parseFlags();
-  const hooks = installHooks(flags.variant);
+  const variant = pickVariant(flags.variant);
+  const hooks = installHooks(variant.id);
   const ui = document.getElementById('ui') as HTMLElement;
   const canvas = document.getElementById('stage') as HTMLCanvasElement;
 
-  let gpu;
-  try {
-    gpu = await initGpu(canvas, { hdr: flags.hdr });
-  } catch (err) {
-    console.error('[axiom] WebGPU initialisation failed:', err);
-    gpu = null;
-  }
-  if (!gpu) {
-    showFallback(ui);
-    return;
-  }
+  const [gpu, core] = await Promise.all([
+    initGpu(canvas, { hdr: flags.hdr }).catch((err): Gpu | null => {
+      console.error('[axiom] WebGPU initialisation failed:', err);
+      return null;
+    }),
+    loadCore(flags.seed).catch((err): Core | null => {
+      console.error('[axiom] could not load the core:', err);
+      return null;
+    }),
+  ]);
+  if (!gpu) return showFallback(ui);
+  if (!core) return showFallback(ui, 'AXIOM could not load its core. Reload to try again.');
   watchHdr(gpu, { hdr: flags.hdr });
 
   const budget = flags.n ?? (isPhone() ? PHONE_PARTICLES : DESKTOP_PARTICLES);
-  const engine = new Engine(gpu, flags.seed, budget);
+  const engine = new Engine(gpu, core, variant, flags.seed, budget);
   const quality = new Quality(budget);
+  const sound = new Sound();
+
+  const mapHost = document.createElement('div');
+  mapHost.className = 'map-host';
+  ui.append(mapHost);
+  engine.attachMap(createParamMap(gpu, core, flags.seed, mapHost, variant.hud.accent));
+
+  const [r, g, b] = variant.render.background.map((c) => Math.round(c * 255));
   const hud = new Hud(
     ui,
     {
@@ -72,17 +58,25 @@ async function boot(): Promise<void> {
         const answered = engine.sensors.requestPermissions();
         enterFullscreen();
         keepAwake();
-        fireBeginTap();
+        sound.unlock();
         void answered.then(() => {
           engine.sensors.arm();
           engine.begun = true;
           hud.dismissGate();
-          fireBegin();
+          void sound.start(engine, variant).then((muted) => muted !== null && hud.setMuted(muted));
         });
       },
-      onMute: fireMute,
+      onMute: (muted) => sound.setMuted(muted),
     },
-    { debug: flags.debug, gate: !flags.skipintro },
+    {
+      debug: flags.debug,
+      gate: !flags.skipintro,
+      variants: VARIANTS,
+      current: variant.id,
+      seed: flags.seed,
+      accent: variant.hud.accent,
+      ink: `rgb(${r} ${g} ${b})`,
+    },
   );
   void gpu.lost.then((reason) => hud.showLost(reason));
 
@@ -91,25 +85,20 @@ async function boot(): Promise<void> {
     engine.begun = true;
   }
 
-  // dev-only handle for tuning the look from the console; stripped from production builds
-  if (import.meta.env.DEV) Object.assign(window, { __axiomEngine: engine });
+  // with ?debug the engine is reachable from the console, for tuning the look
+  if (flags.debug) Object.assign(window, { __axiomEngine: engine });
 
   let fps = 0;
-  bindHooks(
-    hooks,
-    engine,
-    flags.variant,
-    () => fps,
-    () => hud.setLaw(engine.law),
-  );
+  const refreshReadout = (): void => hud.setReadout(engine.law, engine.spectrum);
+  bindHooks(hooks, engine, () => fps, refreshReadout);
   new ResizeObserver(() => engine.resize()).observe(canvas);
 
   // first frame: the lone point is already burning behind the gate
   engine.advance(1 / 60, true);
   await engine.settled();
-  hud.setLaw(engine.law);
+  refreshReadout();
   hooks.ready = true;
-  if (flags.capture) return; // deterministic: frames advance only through __axiom.step
+  if (flags.capture) return; // deterministic and silent: frames advance only through __axiom.step
 
   let last = 0;
   let n = 0;
@@ -128,7 +117,8 @@ async function boot(): Promise<void> {
     if (inFlight >= MAX_IN_FLIGHT) return;
     const ms = last ? now - last : 1000 / 60;
     last = now;
-    engine.advance(Math.min(ms, 1000 / 30) / 1000, true);
+    engine.advance(Math.min(ms / 1000, MAX_FRAME_DT), true);
+    sound.frame(engine);
     inFlight++;
     void engine.settled().then(() => inFlight--);
 
@@ -138,14 +128,14 @@ async function boot(): Promise<void> {
       if (change.scale !== engine.scale) engine.setScale(change.scale);
     }
     fps = 1000 / quality.frameMs;
-    if (++n % 6 === 0) hud.setLaw(engine.law);
+    if (++n % 6 === 0) refreshReadout();
     if (flags.debug && n % 15 === 0) {
       hud.setDebug(
         `${fps.toFixed(0)} fps  ${quality.frameMs.toFixed(1)} ms\n` +
           `scale ${engine.scale.toFixed(2)}  ${engine.width}x${engine.height}\n` +
           `n ${engine.particles.active}  bead ${engine.bead.u.toFixed(2)} ${engine.bead.v.toFixed(2)}` +
           `${engine.bead.autopilot ? ' auto' : ''}\n` +
-          `${gpu.extended ? `hdr x${gpu.hdrHeadroom.toFixed(1)}` : 'sdr'}  seed ${flags.seed}`,
+          `${gpu.extended ? `hdr x${gpu.hdrHeadroom.toFixed(1)}` : 'sdr'}  ${variant.id}  seed ${flags.seed}`,
       );
     }
   };

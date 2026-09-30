@@ -8,7 +8,7 @@
 
 use axiom_core::anchors::{norm, System, NAMES};
 use axiom_core::law::{write_params, Law, Placement, PARAMS_LEN};
-use axiom_core::spectrum::{kaplan_yorke, regime, Benettin, FIXED};
+use axiom_core::spectrum::{classify, Benettin, FIXED, REST_SPEED};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const BG: [u8; 3] = [5, 6, 10];
@@ -48,21 +48,26 @@ fn probe(u: f64, v: f64, seed: u32) -> (f64, u8) {
     let law = Law::from_block(&block);
     let mut b = Benettin::new([0.31, -0.22, 0.27], 0.0);
     // 25 world units of transient, then 100 of averaging, in steps of 0.5.
+    let mut rest = 0;
     for k in 0..250 {
         b.advance(&law, 0.025, 20);
         if !b.healthy() {
             break;
         }
-        if k >= 6 && norm(law.field(b.x)) < 1e-6 {
-            return (0.0, FIXED); // settled onto a fixed point
+        // A tracer that stays put is on a fixed point; stop early.
+        rest = if norm(law.field(b.x)) < REST_SPEED {
+            rest + 1
+        } else {
+            0
+        };
+        if rest >= 12 {
+            return (0.0, FIXED);
         }
         if k == 49 {
             b.restart_average();
         }
     }
-    let l = b.exponents();
-    let d = kaplan_yorke(l);
-    (d, regime(l, d))
+    classify(b.exponents(), rest >= 4)
 }
 
 // ------------------------------------------------------------------ PNG ---
@@ -175,16 +180,16 @@ fn main() {
     let band = |d: f64| (d + 1e-3).floor();
     let mut rgb = vec![0u8; size * size * 3];
     let mut area = [0usize; 5];
-    let (mut rim_total, mut rim_fixed) = (0usize, 0usize);
+    // Fixed-point share per radial band of width 0.05 (index = floor(r / 0.05)).
+    let mut bands = [(0usize, 0usize); 20];
     for j in 0..size {
         for i in 0..size {
             let d = level(i, j);
             if !d.is_nan() {
                 let (u, v) = to_disk(i, j);
-                if u * u + v * v >= 0.49 {
-                    rim_total += 1;
-                    rim_fixed += usize::from(cells[j * size + i].1 == 0);
-                }
+                let b = (((u * u + v * v).sqrt() / 0.05) as usize).min(19);
+                bands[b].0 += 1;
+                bands[b].1 += usize::from(cells[j * size + i].1 == 0);
             }
             let mut c = if d.is_nan() { BG } else { palette(d) };
             if !d.is_nan() {
@@ -233,9 +238,22 @@ fn main() {
         started.elapsed().as_secs_f64(),
         args[1]
     );
+    let share = |lo: usize, hi: usize| {
+        let (n, f) = bands[lo..hi]
+            .iter()
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        100.0 * f as f64 / n.max(1) as f64
+    };
+    let worst = (14..20)
+        .map(|k| 100.0 * bands[k].1 as f64 / bands[k].0.max(1) as f64)
+        .fold(0.0, f64::max);
     println!(
-        "r >= 0.7: {:.1}% of the annulus is fixed",
-        100.0 * rim_fixed as f64 / rim_total as f64
+        "fixed share by radius: r<0.35 {:.0}%  0.35-0.6 {:.0}%  0.6-0.7 {:.0}%  r>=0.7 {:.1}% (worst 0.05-band {:.1}%)",
+        share(0, 7),
+        share(7, 12),
+        share(12, 14),
+        share(14, 20),
+        worst
     );
     println!(
         "disk area  fixed {:.0}%  cycle {:.0}%  torus {:.0}%  strange {:.0}%  labyrinth {:.0}%",
